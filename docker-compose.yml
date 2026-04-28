@@ -19,8 +19,8 @@ services:
       - OLLAMA_PORT=11434
       - PDF_DIR=/app/pdfs
       - LOG_DIR=/app/logs
-      - CHUNK_SIZE = 512
-      - COLLECTION_NAME = tgtransco
+      - CHUNK_SIZE=512
+      - COLLECTION_NAME=tgtransco
     restart: unless-stopped
     stdin_open: true
     tty: true

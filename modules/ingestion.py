@@ -1,99 +1,299 @@
 import os
+import hashlib
 import pathlib
-
+import traceback
 import chromadb
-
 from log_config import setup_logger
 
 logger = setup_logger("ingestion")
 
-PDF_DIR = os.getenv("PDF_DIR", "/app/pdfs")
+PDF_DIR         = os.getenv("PDF_DIR", "/app/pdfs")
+CHUNK_SIZE      = int(os.getenv("CHUNK_SIZE", 512))   # tokens, matched to embedding model
+COLLECTION_NAME = os.getenv("COLLECTION_NAME", "tgtransco")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
 
-CHUNK_SIZE    = 1024
-CHUNK_OVERLAP = 128
+# ---------------------------------------------------------------------------
+# Module-level singletons — initialised once, reused across all ingest calls
+# ---------------------------------------------------------------------------
 
-COLLECTION_NAME = "tgtransco"
+def _make_converter():
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.datamodel.base_models import InputFormat
+
+    logger.debug("SINGLETON_INIT | component=DocumentConverter")
+    try:
+        pipeline_options                    = PdfPipelineOptions()
+        pipeline_options.do_table_structure = True
+        converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+            }
+        )
+        logger.info("SINGLETON_READY | component=DocumentConverter")
+        return converter
+    except Exception as e:
+        logger.error(f"SINGLETON_FAIL | component=DocumentConverter | reason={e}")
+        raise
+
+def _make_chunker():
+    from docling.chunking import HybridChunker
+    logger.debug(f"SINGLETON_INIT | component=HybridChunker | model={EMBEDDING_MODEL!r} | max_tokens={CHUNK_SIZE}")
+    try:
+        chunker = HybridChunker(tokenizer=EMBEDDING_MODEL, max_tokens=CHUNK_SIZE)
+        logger.info(f"SINGLETON_READY | component=HybridChunker | model={EMBEDDING_MODEL!r}")
+        return chunker
+    except Exception as e:
+        logger.error(f"SINGLETON_FAIL | component=HybridChunker | model={EMBEDDING_MODEL!r} | reason={e}")
+        raise
+
+_converter = _make_converter()
+_chunker   = _make_chunker()
 
 
-def _get_collection():
+# ---------------------------------------------------------------------------
+# Chroma helpers
+# ---------------------------------------------------------------------------
+
+def _get_collection() -> chromadb.Collection:
     host = os.getenv("CHROMA_HOST", "localhost")
     port = int(os.getenv("CHROMA_PORT", "8000"))
-    client = chromadb.HttpClient(host=host, port=port)
-    return client.get_or_create_collection(COLLECTION_NAME)
+    logger.debug(f"CHROMA_CONNECT | host={host!r} | port={port} | collection={COLLECTION_NAME!r}")
+    try:
+        client     = chromadb.HttpClient(host=host, port=port)
+        collection = client.get_or_create_collection(COLLECTION_NAME)
+        logger.debug(f"CHROMA_CONNECT_OK | collection={COLLECTION_NAME!r}")
+        return collection
+    except Exception as e:
+        logger.error(f"CHROMA_CONNECT_FAIL | host={host!r} | port={port} | collection={COLLECTION_NAME!r} | reason={e}")
+        raise
 
 
 def _delete_existing_chunks(filename: str) -> int:
-    """Delete all indexed chunks for filename. Returns number of chunks removed."""
-    col = _get_collection()
-    results = col.get(where={"filename": filename})
-    ids = results.get("ids", [])
-    if ids:
+    """Delete all indexed chunks for *filename*. Returns number of chunks removed."""
+    logger.debug(f"DEDUP_QUERY | file={filename!r}")
+    try:
+        col     = _get_collection()
+        results = col.get(where={"filename": filename})
+        ids     = results.get("ids", [])
+    except Exception as e:
+        logger.error(f"DEDUP_QUERY_FAIL | file={filename!r} | reason={e}")
+        raise
+
+    if not ids:
+        logger.debug(f"DEDUP_NO_EXISTING | file={filename!r}")
+        return 0
+
+    logger.debug(f"DEDUP_DELETE | file={filename!r} | chunk_count={len(ids)}")
+    try:
         col.delete(ids=ids)
+        logger.debug(f"DEDUP_DELETE_OK | file={filename!r} | deleted={len(ids)}")
+    except Exception as e:
+        logger.error(f"DEDUP_DELETE_FAIL | file={filename!r} | chunk_count={len(ids)} | reason={e}")
+        raise
+
     return len(ids)
 
 
+def _chunk_id(filename: str, index: int) -> str:
+    """Deterministic chunk ID — enables true upserts instead of delete-then-insert."""
+    return hashlib.sha256(f"{filename}::{index}".encode()).hexdigest()
+
+
+def _is_image_only(md: str) -> bool:
+    lines = [l.strip() for l in md.splitlines() if l.strip()]
+    return not lines or all(l == "<!-- image -->" for l in lines)
+
+
+# ---------------------------------------------------------------------------
+# Core ingest
+# ---------------------------------------------------------------------------
+
 def ingest(pdf_path: str) -> tuple[int, int]:
     """
-    Ingest a PDF in one pass using Docling.
+    Ingest a PDF in one pass using Docling + HybridChunker.
+
+    Tries native conversion first. If the result is empty or image-only,
+    automatically retries with OCR (lazy-loading the OCR converter on first use).
     Removes any previously indexed chunks for this file before adding new ones.
     Returns (chunks_added, chunks_replaced).
     """
     from pipeline import get_vectorstore
-    from docling.document_converter import DocumentConverter
 
     pdf_path = str(pathlib.Path(pdf_path).resolve())
     filename = pathlib.Path(pdf_path).name
     folder   = pathlib.Path(pdf_path).parent.name
 
-    logger.info(f"INGEST_START | file={filename!r} | folder={folder!r}")
+    logger.info(f"INGEST_START | file={filename!r} | folder={folder!r} | path={pdf_path!r}")
 
-    replaced = _delete_existing_chunks(filename)
+    if not pathlib.Path(pdf_path).exists():
+        logger.error(f"INGEST_FILE_NOT_FOUND | file={filename!r} | path={pdf_path!r}")
+        return 0, 0
+
+    # --- Dedup ---
+    try:
+        replaced = _delete_existing_chunks(filename)
+    except Exception as e:
+        logger.error(f"INGEST_DEDUP_FAIL | file={filename!r} | reason={e} | action=aborting_ingest")
+        return 0, 0
+
     if replaced:
         logger.info(f"INGEST_DEDUP | file={filename!r} | removed_chunks={replaced}")
+    else:
+        logger.debug(f"INGEST_DEDUP | file={filename!r} | no_existing_chunks")
 
+    # --- Parse with Docling ---
+    logger.debug(f"DOCLING_CONVERT_START | file={filename!r}")
     try:
-        result = DocumentConverter().convert(pdf_path)
-        text   = result.document.export_to_markdown().strip()
+        result = _converter.convert(pdf_path)
+        md     = result.document.export_to_markdown().strip()
+        logger.debug(f"DOCLING_CONVERT_OK | file={filename!r} | chars={len(md)} | preview={md[:300]!r}")
     except Exception as e:
-        logger.error(f"INGEST_FAIL | file={filename!r} | reason={e}")
+        logger.error(
+            f"DOCLING_CONVERT_FAIL | file={filename!r} | reason={e}\n{traceback.format_exc()}"
+        )
         return 0, replaced
 
-    if not text:
-        logger.warning(f"INGEST_EMPTY | file={filename!r} | no content extracted")
+    if _is_image_only(md):
+        logger.error(
+            f"INGEST_UNREADABLE | file={filename!r} "
+            f"| reason=image_only_pdf — no text extracted"
+        )
         return 0, replaced
 
-    chunks = [
-        text[i:i + CHUNK_SIZE]
-        for i in range(0, len(text), CHUNK_SIZE - CHUNK_OVERLAP)
-        if text[i:i + CHUNK_SIZE].strip()
-    ]
+    # --- Chunk ---
+    logger.debug(f"DOCLING_CHUNK_START | file={filename!r}")
+    try:
+        chunks = list(_chunker.chunk(result.document))
+        logger.debug(f"DOCLING_CHUNK_OK | file={filename!r} | raw_chunks={len(chunks)}")
+    except Exception as e:
+        logger.error(
+            f"DOCLING_CHUNK_FAIL | file={filename!r} | reason={e}\n{traceback.format_exc()}"
+        )
+        return 0, replaced
 
-    metadata = {"filename": filename, "full_path": pdf_path, "folder": folder}
-    vectorstore = get_vectorstore()
-    vectorstore.add_texts(chunks, metadatas=[metadata] * len(chunks))
+    if not chunks:
+        logger.warning(
+            f"INGEST_EMPTY | file={filename!r} | stage=post_chunk "
+            f"| no content extracted from document"
+        )
+        return 0, replaced
 
-    logger.info(f"INGEST_DONE | file={filename!r} | chunks={len(chunks)} | replaced={replaced}")
-    return len(chunks), replaced
+    # --- Build per-chunk texts and metadata ---
+    texts     = []
+    metadatas = []
+    ids       = []
+    skipped   = 0
 
+    for i, chunk in enumerate(chunks):
+        text = chunk.text.strip()
+        if not text:
+            logger.debug(f"CHUNK_SKIP_EMPTY | file={filename!r} | chunk_idx={i}")
+            skipped += 1
+            continue
+
+        headings  = getattr(chunk.meta, "headings", None) or []
+        page_no   = None
+        doc_items = getattr(chunk.meta, "doc_items", None) or []
+        if doc_items:
+            prov = getattr(doc_items[0], "prov", None) or []
+            if prov:
+                page_no = getattr(prov[0], "page_no", None)
+
+        logger.debug(
+            f"CHUNK_BUILD | file={filename!r} | chunk_idx={i} | page={page_no} "
+            f"| headings={headings!r} | chars={len(text)}"
+        )
+
+        texts.append(text)
+        metadatas.append({
+            "filename":  filename,
+            "full_path": pdf_path,
+            "folder":    folder,
+            "headings":  " > ".join(headings) if headings else "",
+            "page":      page_no,
+            "chunk_idx": i,
+        })
+        ids.append(_chunk_id(filename, i))
+
+    if skipped:
+        logger.warning(f"CHUNK_SKIPPED_EMPTY | file={filename!r} | skipped={skipped} | kept={len(texts)}")
+
+    if not texts:
+        logger.error(
+            f"INGEST_EMPTY_AFTER_FILTER | file={filename!r} | raw_chunks={len(chunks)} "
+            f"| all chunks were empty after stripping — possible Docling parse issue"
+        )
+        return 0, replaced
+
+    # --- Write to vector store ---
+    logger.debug(f"VECTORSTORE_WRITE_START | file={filename!r} | chunks={len(texts)}")
+    try:
+        vectorstore = get_vectorstore()
+        vectorstore.add_texts(texts, metadatas=metadatas, ids=ids)
+        logger.debug(f"VECTORSTORE_WRITE_OK | file={filename!r} | chunks={len(texts)}")
+    except Exception as e:
+        logger.error(
+            f"VECTORSTORE_WRITE_FAIL | file={filename!r} | chunks={len(texts)} "
+            f"| reason={e}\n{traceback.format_exc()}"
+        )
+        return 0, replaced
+
+    logger.info(
+        f"INGEST_DONE | file={filename!r} | chunks_added={len(texts)} "
+        f"| chunks_replaced={replaced} | skipped_empty={skipped}"
+    )
+    return len(texts), replaced
+
+
+# ---------------------------------------------------------------------------
+# Folder ingest
+# ---------------------------------------------------------------------------
 
 def ingest_folder(folder_path: str = None) -> dict:
     """
-    Ingest all PDFs found recursively under folder_path.
+    Ingest all PDFs found recursively under *folder_path*.
     Returns a summary dict: {filename: {"added": int, "replaced": int}}.
     """
     folder_path = folder_path or PDF_DIR
-    summary     = {}
+    summary: dict[str, dict] = {}
+    failed:  list[str]       = []
+
+    if not pathlib.Path(folder_path).exists():
+        logger.error(f"INGEST_FOLDER_NOT_FOUND | path={folder_path!r}")
+        return summary
 
     pdfs = list(pathlib.Path(folder_path).rglob("*.pdf"))
     if not pdfs:
-        logger.warning(f"INGEST_FOLDER_EMPTY | path={folder_path!r}")
+        logger.warning(f"INGEST_FOLDER_EMPTY | path={folder_path!r} | no PDF files found")
         return summary
 
     logger.info(f"INGEST_FOLDER_START | path={folder_path!r} | files={len(pdfs)}")
-    for pdf in pdfs:
-        added, replaced = ingest(str(pdf))
-        summary[pdf.name] = {"added": added, "replaced": replaced}
+
+    for idx, pdf in enumerate(pdfs, start=1):
+        logger.info(f"INGEST_FOLDER_PROGRESS | file={pdf.name!r} | {idx}/{len(pdfs)}")
+        try:
+            added, replaced = ingest(str(pdf))
+            summary[pdf.name] = {"added": added, "replaced": replaced}
+            if added == 0:
+                logger.warning(
+                    f"INGEST_FOLDER_FILE_ZERO_CHUNKS | file={pdf.name!r} "
+                    f"| replaced={replaced} | file may be empty or unreadable"
+                )
+        except Exception as e:
+            logger.error(
+                f"INGEST_FOLDER_FILE_FAIL | file={pdf.name!r} | reason={e}\n{traceback.format_exc()}"
+            )
+            failed.append(pdf.name)
+            summary[pdf.name] = {"added": 0, "replaced": 0, "error": str(e)}
 
     total = sum(v["added"] for v in summary.values())
-    logger.info(f"INGEST_FOLDER_DONE | files={len(summary)} | total_chunks={total}")
+    logger.info(
+        f"INGEST_FOLDER_DONE | path={folder_path!r} | files_attempted={len(pdfs)} "
+        f"| files_ok={len(pdfs) - len(failed)} | files_failed={len(failed)} "
+        f"| total_chunks={total}"
+    )
+    if failed:
+        logger.error(f"INGEST_FOLDER_FAILURES | files={failed}")
+
     return summary

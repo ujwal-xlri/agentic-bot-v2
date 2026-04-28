@@ -5,6 +5,7 @@ from datetime import datetime
 from log_config import setup_logger
 from modules.query import query
 from modules.ingestion import ingest, ingest_folder
+from modules.export import FailedFileRecord, build_failed_records, generate_failed_files_excel
 
 logger = setup_logger("app")
 
@@ -206,6 +207,10 @@ if "page" not in st.session_state:
     st.session_state["page"] = "chat"
 if "last_ingested" not in st.session_state:
     st.session_state["last_ingested"] = "Never"
+if "failed_upload_excel" not in st.session_state:
+    st.session_state["failed_upload_excel"] = None
+if "failed_bulk_excel" not in st.session_state:
+    st.session_state["failed_bulk_excel"] = None
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -391,7 +396,9 @@ elif st.session_state["page"] == "upload":
 
     if uploaded:
         if st.button("⚡ Ingest All", type="primary"):
+            st.session_state["failed_upload_excel"] = None
             total_chunks = 0
+            upload_failures: list = []
             for f in uploaded:
                 save_path = upload_dir / f.name
                 size_mb   = round(f.size / 1024 / 1024, 2)
@@ -403,19 +410,43 @@ elif st.session_state["page"] == "upload":
                 try:
                     with st.spinner(f"Ingesting {f.name}..."):
                         added, replaced = ingest(str(save_path))
-                    st.session_state["last_ingested"] = datetime.now().strftime("%d %b %Y, %H:%M")
-                    if replaced:
-                        st.success(f"✓ {added} chunks ingested (replaced {replaced} outdated chunks)")
+                    if added == 0:
+                        upload_failures.append(FailedFileRecord(
+                            f.name,
+                            "No text could be extracted (image-only or empty document)"
+                        ))
+                        st.error(f"✗ Could not extract text — this file was not indexed.")
                     else:
-                        st.success(f"✓ {added} chunks ingested")
-                    total_chunks += added
+                        st.session_state["last_ingested"] = datetime.now().strftime("%d %b %Y, %H:%M")
+                        if replaced:
+                            st.success(f"✓ {added} chunks ingested (replaced {replaced} outdated chunks)")
+                        else:
+                            st.success(f"✓ {added} chunks ingested")
+                        total_chunks += added
                 except Exception as e:
                     logger.error(f"INGEST_ERROR | file={f.name!r} | error={e}")
+                    upload_failures.append(FailedFileRecord(f.name, str(e)))
                     st.error(f"✗ Failed: {e}")
 
             if total_chunks:
                 st.balloons()
                 st.success(f"Done — {total_chunks} total chunks added to knowledge base.")
+
+            if upload_failures:
+                st.session_state["failed_upload_excel"] = generate_failed_files_excel(upload_failures)
+                st.session_state["failed_upload_name"] = (
+                    f"failed_files_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                )
+
+        if st.session_state.get("failed_upload_excel"):
+            st.warning(f"One or more uploaded files could not be ingested. Download the report for details.")
+            st.download_button(
+                label="⬇️ Download Failed Files Report (Excel)",
+                data=st.session_state["failed_upload_excel"],
+                file_name=st.session_state.get("failed_upload_name", "failed_files.xlsx"),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_upload_failed",
+            )
 
     st.markdown("---")
     st.markdown('<div class="section-label">Bulk Ingest from Volume</div>',
@@ -427,16 +458,40 @@ elif st.session_state["page"] == "upload":
     )
 
     if st.button("Ingest All PDFs from /app/pdfs"):
+        st.session_state["failed_bulk_excel"] = None
         logger.info("BULK_INGEST_START | source=/app/pdfs")
         with st.spinner("Ingesting all PDFs — this may take a while..."):
             summary = ingest_folder()
-        total = sum(v["added"] for v in summary.values())
+        total    = sum(v["added"] for v in summary.values())
+        ok_files = [n for n, v in summary.items() if v["added"] > 0]
+        fail_files = [n for n, v in summary.items() if v["added"] == 0]
         logger.info(f"BULK_INGEST_DONE | files={len(summary)} | total_chunks={total}")
-        st.success(f"Done — {len(summary)} files processed.")
-        for name, info in summary.items():
-            replaced_note = f", replaced {info['replaced']}" if info["replaced"] else ""
-            st.markdown(f"- **{name}**: {info['added']} chunks{replaced_note}")
+        st.success(f"Done — {len(ok_files)}/{len(summary)} files indexed, {total:,} chunks added.")
+        for name in ok_files:
+            info = summary[name]
+            replaced_note = f" (replaced {info['replaced']} outdated)" if info["replaced"] else ""
+            st.markdown(f"- ✓ **{name}**: {info['added']} chunks{replaced_note}")
+        for name in fail_files:
+            err = summary[name].get("error", "no text could be extracted")
+            st.markdown(f"- ✗ **{name}**: not indexed — {err}")
         st.session_state["last_ingested"] = datetime.now().strftime("%d %b %Y, %H:%M")
+
+        if fail_files:
+            records = build_failed_records(summary)
+            st.session_state["failed_bulk_excel"] = generate_failed_files_excel(records)
+            st.session_state["failed_bulk_name"] = (
+                f"failed_files_bulk_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            )
+
+    if st.session_state.get("failed_bulk_excel"):
+        st.warning("One or more files from the volume could not be ingested. Download the report for details.")
+        st.download_button(
+            label="⬇️ Download Failed Files Report (Excel)",
+            data=st.session_state["failed_bulk_excel"],
+            file_name=st.session_state.get("failed_bulk_name", "failed_files_bulk.xlsx"),
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dl_bulk_failed",
+        )
 
     st.markdown("---")
     st.markdown('<div class="section-label">Danger Zone</div>', unsafe_allow_html=True)
