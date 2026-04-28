@@ -1,0 +1,27 @@
+services:
+  agentic-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agentic-bot-v2
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./pdfs:/app/pdfs
+      - ./chroma_data:/app/chroma_data
+      - ./logs:/app/logs
+      - D:/ollama:/root/.ollama
+    environment:
+      - OLLAMA_MODEL=llama3.1:8b
+      - CHROMA_HOST=localhost
+      - CHROMA_PORT=8000
+      - OLLAMA_HOST=localhost
+      - OLLAMA_PORT=11434
+      - PDF_DIR=/app/pdfs
+      - LOG_DIR=/app/logs
+      - CHUNK_SIZE = 512
+      - COLLECTION_NAME = tgtransco
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+
