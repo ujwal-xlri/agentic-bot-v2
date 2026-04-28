@@ -1,0 +1,48 @@
+# Git
+.git/
+.gitignore
+
+# Claude Code
+.claude/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs (mounted as volume at runtime)
+logs/
+
+# Runtime data volumes — excluded so Docker build doesn't bake in local state.
+# These are mounted from the host via docker-compose volumes.
+pdfs/
+chroma_data/
+
+# Docling model cache (rebuilt inside image at build time)
+.docling/
+
+# Environment files (secrets should not be baked into the image)
+.env
+.env.*
+
+# Dev / test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+*.ipynb
+.ipynb_checkpoints/
