@@ -1,5 +1,6 @@
 import os
 import sys
+import defaults
 from log_config import setup_logger
 
 logger = setup_logger("pipeline")
@@ -9,18 +10,19 @@ from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 import chromadb
 
-# ── Config from environment (set in docker-compose.yml) ──────────────────────
-OLLAMA_MODEL  = os.getenv("OLLAMA_MODEL",  "llama3.2:3b")
-OLLAMA_HOST   = os.getenv("OLLAMA_HOST",   "localhost")
-OLLAMA_PORT   = os.getenv("OLLAMA_PORT",   "11434")
-CHROMA_HOST   = os.getenv("CHROMA_HOST",   "localhost")
-CHROMA_PORT   = int(os.getenv("CHROMA_PORT", "8000"))
-PDF_DIR       = os.getenv("PDF_DIR",       "/app/pdfs")
-COLLECTION    = "tgtransco"
+# ── Config from environment ───────────────────────────────────────────────────
+OLLAMA_MODEL   = os.getenv("OLLAMA_MODEL",   defaults.OLLAMA_MODEL)
+OLLAMA_HOST    = os.getenv("OLLAMA_HOST",    defaults.OLLAMA_HOST)
+OLLAMA_PORT    = os.getenv("OLLAMA_PORT",    defaults.OLLAMA_PORT)
+CHROMA_HOST    = os.getenv("CHROMA_HOST",    defaults.CHROMA_HOST)
+CHROMA_PORT    = int(os.getenv("CHROMA_PORT", defaults.CHROMA_PORT))
+PDF_DIR        = os.getenv("PDF_DIR",        defaults.PDF_DIR)
+COLLECTION     = os.getenv("COLLECTION_NAME", defaults.COLLECTION_NAME)
+EMBEDDER_MODEL = os.getenv("EMBEDDER_MODEL", defaults.EMBEDDER_MODEL)
 
 # ── Models (initialised once, reused by app.py via import) ───────────────────
-logger.info("PIPELINE_INIT | loading embedding model")
-embedder = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+logger.info(f"PIPELINE_INIT | loading embedding model={EMBEDDER_MODEL!r}")
+embedder = HuggingFaceEmbeddings(model_name=EMBEDDER_MODEL)
 
 logger.info(f"PIPELINE_INIT | connecting to Ollama model={OLLAMA_MODEL!r}")
 llm = OllamaLLM(

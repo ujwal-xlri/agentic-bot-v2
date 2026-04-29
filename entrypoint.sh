@@ -2,8 +2,12 @@
 set -e
 
 OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.1:8b}"
-OLLAMA_URL="http://localhost:11434"
-CHROMA_URL="http://localhost:8000"
+OLLAMA_HOST="${OLLAMA_HOST:-localhost}"
+OLLAMA_PORT="${OLLAMA_PORT:-11434}"
+CHROMA_HOST="${CHROMA_HOST:-localhost}"
+CHROMA_PORT="${CHROMA_PORT:-8000}"
+OLLAMA_URL="http://${OLLAMA_HOST}:${OLLAMA_PORT}"
+CHROMA_URL="http://${CHROMA_HOST}:${CHROMA_PORT}"
 
 log() { echo "[entrypoint] $(date '+%H:%M:%S') — $*"; }
 

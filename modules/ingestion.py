@@ -3,14 +3,15 @@ import hashlib
 import pathlib
 import traceback
 import chromadb
+import defaults
 from log_config import setup_logger
 
 logger = setup_logger("ingestion")
 
-PDF_DIR         = os.getenv("PDF_DIR", "/app/pdfs")
-CHUNK_SIZE      = int(os.getenv("CHUNK_SIZE", 512))   # tokens, matched to embedding model
-COLLECTION_NAME = os.getenv("COLLECTION_NAME", "tgtransco")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+PDF_DIR         = os.getenv("PDF_DIR",         defaults.PDF_DIR)
+CHUNK_SIZE      = int(os.getenv("CHUNK_SIZE",  defaults.CHUNK_SIZE))
+COLLECTION_NAME = os.getenv("COLLECTION_NAME", defaults.COLLECTION_NAME)
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", defaults.EMBEDDING_MODEL)
 
 # ---------------------------------------------------------------------------
 # Module-level singletons — initialised once, reused across all ingest calls
@@ -56,8 +57,8 @@ _chunker   = _make_chunker()
 # ---------------------------------------------------------------------------
 
 def _get_collection() -> chromadb.Collection:
-    host = os.getenv("CHROMA_HOST", "localhost")
-    port = int(os.getenv("CHROMA_PORT", "8000"))
+    host = os.getenv("CHROMA_HOST", defaults.CHROMA_HOST)
+    port = int(os.getenv("CHROMA_PORT", defaults.CHROMA_PORT))
     logger.debug(f"CHROMA_CONNECT | host={host!r} | port={port} | collection={COLLECTION_NAME!r}")
     try:
         client     = chromadb.HttpClient(host=host, port=port)

@@ -1,9 +1,13 @@
+import os
 import time
 
 from langchain_classic.chains.retrieval_qa.base import RetrievalQA
+import defaults
 from log_config import setup_logger
 
 logger = setup_logger("query")
+
+RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", defaults.RETRIEVAL_K))
 
 
 def query(question: str) -> dict:
@@ -14,7 +18,7 @@ def query(question: str) -> dict:
     from pipeline import llm, get_vectorstore
 
     vectorstore = get_vectorstore()
-    retriever   = vectorstore.as_retriever(search_kwargs={"k": 8})
+    retriever   = vectorstore.as_retriever(search_kwargs={"k": RETRIEVAL_K})
 
     qa = RetrievalQA.from_chain_type(
         llm=llm,
@@ -31,12 +35,12 @@ def query(question: str) -> dict:
     sources = []
     for doc in result.get("source_documents", []):
         m   = doc.metadata
-        key = (m.get("filename", ""), m.get("page_number", ""))
+        key = (m.get("filename", ""), m.get("page", ""))
         if key not in seen:
             seen.add(key)
             sources.append({
-                "filename":    m.get("filename",    "unknown"),
-                "page_number": m.get("page_number", "?"),
+                "filename":    m.get("filename", "unknown"),
+                "page_number": m.get("page", "?"),
                 "full_path":   m.get("full_path",   ""),
                 "folder":      m.get("folder",      ""),
             })
