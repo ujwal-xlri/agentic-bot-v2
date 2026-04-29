@@ -11,16 +11,8 @@ services:
       - ./chroma_data:/app/chroma_data
       - ./logs:/app/logs
       - D:/ollama:/root/.ollama
-    environment:
-      - OLLAMA_MODEL=llama3.1:8b
-      - CHROMA_HOST=localhost
-      - CHROMA_PORT=8000
-      - OLLAMA_HOST=localhost
-      - OLLAMA_PORT=11434
-      - PDF_DIR=/app/pdfs
-      - LOG_DIR=/app/logs
-      - CHUNK_SIZE=512
-      - COLLECTION_NAME=tgtransco
+    env_file:
+      - .env
     restart: unless-stopped
     stdin_open: true
     tty: true

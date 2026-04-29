@@ -88,6 +88,7 @@ RUN python3.11 -m pip install --no-cache-dir \
 # Batch 7 — PDF tooling + UI
 RUN python3.11 -m pip install --no-cache-dir \
     pdfplumber==0.11.4 \
+    pymupdf \
     streamlit==1.40.2 \
     python-dotenv==1.0.1
 
