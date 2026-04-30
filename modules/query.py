@@ -1,7 +1,7 @@
 import os
 import time
 
-from langchain_classic.chains.retrieval_qa.base import RetrievalQA
+from langchain_classic.chains.question_answering import load_qa_chain
 import defaults
 from log_config import setup_logger
 
@@ -20,20 +20,25 @@ def query(question: str) -> dict:
     vectorstore = get_vectorstore()
     retriever   = vectorstore.as_retriever(search_kwargs={"k": RETRIEVAL_K})
 
-    qa = RetrievalQA.from_chain_type(
-        llm=llm,
-        retriever=retriever,
-        return_source_documents=True
-    )
-
     logger.info(f"QUERY_START | q={question!r}")
-    start  = time.time()
-    result = qa.invoke({"query": question})
-    elapsed = round(time.time() - start, 1)
+    total_start = time.time()
+
+    # Stage 1: embed question + similarity search
+    t0   = time.time()
+    docs = retriever.invoke(question)
+    logger.info(f"QUERY_RETRIEVAL | elapsed={round(time.time() - t0, 3)}s | chunks={len(docs)}")
+
+    # Stage 2: LLM inference
+    t1     = time.time()
+    chain  = load_qa_chain(llm, chain_type="stuff")
+    result = chain.invoke({"input_documents": docs, "question": question})
+    logger.info(f"QUERY_LLM | elapsed={round(time.time() - t1, 3)}s")
+
+    elapsed = round(time.time() - total_start, 1)
 
     seen    = set()
     sources = []
-    for doc in result.get("source_documents", []):
+    for doc in docs:
         m   = doc.metadata
         key = (m.get("filename", ""), m.get("page", ""))
         if key not in seen:
@@ -47,7 +52,7 @@ def query(question: str) -> dict:
 
     logger.info(f"QUERY_DONE | elapsed={elapsed}s | sources={len(sources)}")
     return {
-        "answer":  result["result"],
+        "answer":  result["output_text"],
         "sources": sources,
         "elapsed": elapsed,
     }

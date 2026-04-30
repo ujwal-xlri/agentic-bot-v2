@@ -7,9 +7,8 @@ OLLAMA_MODEL = "llama3.1:8b"
 OLLAMA_HOST  = "localhost"
 OLLAMA_PORT  = "11434"
 
-# Embeddings
-EMBEDDER_MODEL  = "all-MiniLM-L6-v2"
-EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
+# Embeddings — fallback options: "BAAI/bge-small-en-v1.5", "all-MiniLM-L6-v2"
+EMBEDDING_MODEL = "BAAI/bge-base-en-v1.5"
 
 # Vector store
 CHROMA_HOST     = "localhost"

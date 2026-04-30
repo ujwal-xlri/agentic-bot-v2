@@ -1,7 +1,7 @@
 import os
 import hashlib
 import pathlib
-import traceback
+import time
 import chromadb
 import defaults
 from log_config import setup_logger
@@ -33,8 +33,8 @@ def _make_converter():
         )
         logger.info("SINGLETON_READY | component=DocumentConverter")
         return converter
-    except Exception as e:
-        logger.error(f"SINGLETON_FAIL | component=DocumentConverter | reason={e}")
+    except Exception:
+        logger.exception("SINGLETON_FAIL | component=DocumentConverter")
         raise
 
 def _make_chunker():
@@ -44,8 +44,8 @@ def _make_chunker():
         chunker = HybridChunker(tokenizer=EMBEDDING_MODEL, max_tokens=CHUNK_SIZE)
         logger.info(f"SINGLETON_READY | component=HybridChunker | model={EMBEDDING_MODEL!r}")
         return chunker
-    except Exception as e:
-        logger.error(f"SINGLETON_FAIL | component=HybridChunker | model={EMBEDDING_MODEL!r} | reason={e}")
+    except Exception:
+        logger.exception(f"SINGLETON_FAIL | component=HybridChunker | model={EMBEDDING_MODEL!r}")
         raise
 
 _converter = _make_converter()
@@ -65,8 +65,8 @@ def _get_collection() -> chromadb.Collection:
         collection = client.get_or_create_collection(COLLECTION_NAME)
         logger.debug(f"CHROMA_CONNECT_OK | collection={COLLECTION_NAME!r}")
         return collection
-    except Exception as e:
-        logger.error(f"CHROMA_CONNECT_FAIL | host={host!r} | port={port} | collection={COLLECTION_NAME!r} | reason={e}")
+    except Exception:
+        logger.exception(f"CHROMA_CONNECT_FAIL | host={host!r} | port={port} | collection={COLLECTION_NAME!r}")
         raise
 
 
@@ -77,8 +77,8 @@ def _delete_existing_chunks(filename: str) -> int:
         col     = _get_collection()
         results = col.get(where={"filename": filename})
         ids     = results.get("ids", [])
-    except Exception as e:
-        logger.error(f"DEDUP_QUERY_FAIL | file={filename!r} | reason={e}")
+    except Exception:
+        logger.exception(f"DEDUP_QUERY_FAIL | file={filename!r}")
         raise
 
     if not ids:
@@ -89,8 +89,8 @@ def _delete_existing_chunks(filename: str) -> int:
     try:
         col.delete(ids=ids)
         logger.debug(f"DEDUP_DELETE_OK | file={filename!r} | deleted={len(ids)}")
-    except Exception as e:
-        logger.error(f"DEDUP_DELETE_FAIL | file={filename!r} | chunk_count={len(ids)} | reason={e}")
+    except Exception:
+        logger.exception(f"DEDUP_DELETE_FAIL | file={filename!r} | chunk_count={len(ids)}")
         raise
 
     return len(ids)
@@ -146,13 +146,12 @@ def ingest(pdf_path: str) -> tuple[int, int]:
     # --- Parse with Docling ---
     logger.debug(f"DOCLING_CONVERT_START | file={filename!r}")
     try:
+        t0     = time.time()
         result = _converter.convert(pdf_path)
         md     = result.document.export_to_markdown().strip()
-        logger.debug(f"DOCLING_CONVERT_OK | file={filename!r} | chars={len(md)} | preview={md[:300]!r}")
-    except Exception as e:
-        logger.error(
-            f"DOCLING_CONVERT_FAIL | file={filename!r} | reason={e}\n{traceback.format_exc()}"
-        )
+        logger.info(f"DOCLING_CONVERT_OK | file={filename!r} | elapsed={round(time.time()-t0,3)}s | chars={len(md)}")
+    except Exception:
+        logger.exception(f"DOCLING_CONVERT_FAIL | file={filename!r}")
         return 0, replaced
 
     if _is_image_only(md):
@@ -165,12 +164,11 @@ def ingest(pdf_path: str) -> tuple[int, int]:
     # --- Chunk ---
     logger.debug(f"DOCLING_CHUNK_START | file={filename!r}")
     try:
+        t0     = time.time()
         chunks = list(_chunker.chunk(result.document))
-        logger.debug(f"DOCLING_CHUNK_OK | file={filename!r} | raw_chunks={len(chunks)}")
-    except Exception as e:
-        logger.error(
-            f"DOCLING_CHUNK_FAIL | file={filename!r} | reason={e}\n{traceback.format_exc()}"
-        )
+        logger.info(f"DOCLING_CHUNK_OK | file={filename!r} | elapsed={round(time.time()-t0,3)}s | raw_chunks={len(chunks)}")
+    except Exception:
+        logger.exception(f"DOCLING_CHUNK_FAIL | file={filename!r}")
         return 0, replaced
 
     if not chunks:
@@ -230,14 +228,12 @@ def ingest(pdf_path: str) -> tuple[int, int]:
     # --- Write to vector store ---
     logger.debug(f"VECTORSTORE_WRITE_START | file={filename!r} | chunks={len(texts)}")
     try:
+        t0          = time.time()
         vectorstore = get_vectorstore()
         vectorstore.add_texts(texts, metadatas=metadatas, ids=ids)
-        logger.debug(f"VECTORSTORE_WRITE_OK | file={filename!r} | chunks={len(texts)}")
-    except Exception as e:
-        logger.error(
-            f"VECTORSTORE_WRITE_FAIL | file={filename!r} | chunks={len(texts)} "
-            f"| reason={e}\n{traceback.format_exc()}"
-        )
+        logger.info(f"VECTORSTORE_WRITE_OK | file={filename!r} | elapsed={round(time.time()-t0,3)}s | chunks={len(texts)}")
+    except Exception:
+        logger.exception(f"VECTORSTORE_WRITE_FAIL | file={filename!r} | chunks={len(texts)}")
         return 0, replaced
 
     logger.info(
@@ -282,9 +278,7 @@ def ingest_folder(folder_path: str = None) -> dict:
                     f"| replaced={replaced} | file may be empty or unreadable"
                 )
         except Exception as e:
-            logger.error(
-                f"INGEST_FOLDER_FILE_FAIL | file={pdf.name!r} | reason={e}\n{traceback.format_exc()}"
-            )
+            logger.exception(f"INGEST_FOLDER_FILE_FAIL | file={pdf.name!r}")
             failed.append(pdf.name)
             summary[pdf.name] = {"added": 0, "replaced": 0, "error": str(e)}
 

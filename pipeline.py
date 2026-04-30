@@ -18,11 +18,11 @@ CHROMA_HOST    = os.getenv("CHROMA_HOST",    defaults.CHROMA_HOST)
 CHROMA_PORT    = int(os.getenv("CHROMA_PORT", defaults.CHROMA_PORT))
 PDF_DIR        = os.getenv("PDF_DIR",        defaults.PDF_DIR)
 COLLECTION     = os.getenv("COLLECTION_NAME", defaults.COLLECTION_NAME)
-EMBEDDER_MODEL = os.getenv("EMBEDDER_MODEL", defaults.EMBEDDER_MODEL)
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", defaults.EMBEDDING_MODEL)
 
 # ── Models (initialised once, reused by app.py via import) ───────────────────
-logger.info(f"PIPELINE_INIT | loading embedding model={EMBEDDER_MODEL!r}")
-embedder = HuggingFaceEmbeddings(model_name=EMBEDDER_MODEL)
+logger.info(f"PIPELINE_INIT | loading embedding model={EMBEDDING_MODEL!r}")
+embedder = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
 
 logger.info(f"PIPELINE_INIT | connecting to Ollama model={OLLAMA_MODEL!r}")
 llm = OllamaLLM(
@@ -35,12 +35,14 @@ chroma_client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+_vectorstore = Chroma(
+    client=chroma_client,
+    collection_name=COLLECTION,
+    embedding_function=embedder
+)
+
 def get_vectorstore():
-    return Chroma(
-        client=chroma_client,
-        collection_name=COLLECTION,
-        embedding_function=embedder
-    )
+    return _vectorstore
 
 from modules.ingestion import ingest, ingest_folder  # noqa: F401
 from modules.query import query  # noqa: F401
