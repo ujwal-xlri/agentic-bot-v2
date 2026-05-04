@@ -256,6 +256,8 @@ if "messages" not in st.session_state:
     st.session_state["messages"] = []
 if "page" not in st.session_state:
     st.session_state["page"] = "home"
+if "mode" not in st.session_state:
+    st.session_state["mode"] = None
 if "last_ingested" not in st.session_state:
     st.session_state["last_ingested"] = "Never"
 if "failed_upload_excel" not in st.session_state:
@@ -274,8 +276,6 @@ if "upload_ingest_results" not in st.session_state:
     st.session_state["upload_ingest_results"] = []
 if "upload_ingest_total" not in st.session_state:
     st.session_state["upload_ingest_total"] = 0
-if "show_upload_balloons" not in st.session_state:
-    st.session_state["show_upload_balloons"] = False
 if "bulk_ingest_summary" not in st.session_state:
     st.session_state["bulk_ingest_summary"] = None
 if "pdf_viewer_open" not in st.session_state:
@@ -343,11 +343,21 @@ with st.sidebar:
             st.session_state["page"] = "home"
             st.rerun()
 
-    if _cur in ("chat", "docs"):
+    _mode = st.session_state["mode"]
+
+    if _mode == "query":
         if st.button("💬  Chat", use_container_width=True, disabled=task_running,
                      type="primary" if _cur == "chat" else "secondary"):
             st.session_state["page"] = "chat"
             st.rerun()
+
+    if _mode == "ingest":
+        if st.button("⬆️  Ingest", use_container_width=True, disabled=task_running,
+                     type="primary" if _cur == "upload" else "secondary"):
+            st.session_state["page"] = "upload"
+            st.rerun()
+
+    if _mode in ("query", "ingest"):
         if st.button("📁  Documents", use_container_width=True, disabled=task_running,
                      type="primary" if _cur == "docs" else "secondary"):
             st.session_state["page"] = "docs"
@@ -416,6 +426,7 @@ if st.session_state["page"] == "home":
         """, unsafe_allow_html=True)
         if st.button("Enter Query Mode", key="home_query", use_container_width=True, type="primary"):
             st.session_state["page"] = "chat"
+            st.session_state["mode"] = "query"
             st.rerun()
 
     with col2:
@@ -428,6 +439,7 @@ if st.session_state["page"] == "home":
         """, unsafe_allow_html=True)
         if st.button("Enter Ingest Mode", key="home_ingest", use_container_width=True, type="secondary"):
             st.session_state["page"] = "upload"
+            st.session_state["mode"] = "ingest"
             st.rerun()
 
 
@@ -595,6 +607,9 @@ elif st.session_state["page"] == "upload":
 
     st.markdown("### Upload & Ingest")
 
+    if st.session_state["pdf_viewer_open"] and st.session_state["pdf_viewer_path"]:
+        _pdf_viewer_modal()
+
     upload_dir = pathlib.Path(os.getenv("PDF_DIR", defaults.PDF_DIR)) / "Uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
 
@@ -632,7 +647,6 @@ elif st.session_state["page"] == "upload":
 
         st.session_state["upload_ingest_results"] = results
         st.session_state["upload_ingest_total"] = total_chunks
-        st.session_state["show_upload_balloons"] = total_chunks > 0
         st.session_state["failed_upload_excel"] = None
         if upload_failures:
             st.session_state["failed_upload_excel"] = generate_failed_files_excel(upload_failures)
@@ -698,9 +712,6 @@ elif st.session_state["page"] == "upload":
                 st.error(f"✗ **{r['name']}**: Failed — {r['message']}")
         if total:
             st.success(f"Done — {total} total chunks added to knowledge base.")
-        if st.session_state["show_upload_balloons"]:
-            st.balloons()
-            st.session_state["show_upload_balloons"] = False
 
     if st.session_state.get("failed_upload_excel"):
         st.warning("One or more uploaded files could not be ingested. Download the report for details.")
@@ -751,6 +762,49 @@ elif st.session_state["page"] == "upload":
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="dl_bulk_failed",
         )
+
+    st.markdown("---")
+    st.markdown('<div class="section-label">Indexed Documents</div>', unsafe_allow_html=True)
+
+    all_pdfs_ingest = get_all_pdfs()
+    if not all_pdfs_ingest:
+        st.markdown("<small style='color:#5a5f7a'>No PDFs found on disk yet.</small>",
+                    unsafe_allow_html=True)
+    else:
+        doc_search = st.text_input("🔍  Filter documents...", placeholder="Type to filter...",
+                                   key="ingest_doc_search")
+        for folder, paths in sorted(all_pdfs_ingest.items()):
+            filtered = [p for p in paths
+                        if not doc_search or doc_search.lower() in pathlib.Path(p).name.lower()]
+            if not filtered:
+                continue
+            st.markdown(f'<div class="folder-header">📂 {folder} ({len(filtered)})</div>',
+                        unsafe_allow_html=True)
+            for pdf_path in filtered:
+                pdf   = pathlib.Path(pdf_path)
+                fsize = round(pdf.stat().st_size / 1024 / 1024, 1) if pdf.exists() else "?"
+                col1, col2 = st.columns([5, 1])
+                with col1:
+                    st.markdown(f"""
+                    <div class="doc-card">
+                        <div class="doc-name">📄 {pdf.name}</div>
+                        <div class="doc-meta">{fsize} MB · {pdf_path}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with col2:
+                    if st.button("Open", key=f"ingest_open_{pdf_path}"):
+                        if pdf.exists():
+                            st.session_state.update({
+                                "pdf_viewer_open":     True,
+                                "pdf_viewer_path":     pdf_path,
+                                "pdf_viewer_filename": pdf.name,
+                                "pdf_viewer_page":     1,
+                                "pdf_viewer_ref_page": 1,
+                                "pdf_viewer_total":    get_pdf_page_count(pdf_path),
+                            })
+                        else:
+                            st.toast(f"File not found: {pdf.name}", icon="⚠️")
+                        st.rerun()
 
     st.markdown("---")
     st.markdown('<div class="section-label">Danger Zone</div>', unsafe_allow_html=True)
