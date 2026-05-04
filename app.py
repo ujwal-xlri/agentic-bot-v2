@@ -1,5 +1,6 @@
 import os
 import html
+import time
 import pathlib
 import streamlit as st
 from datetime import datetime
@@ -7,7 +8,7 @@ import defaults
 
 COLLECTION_NAME = os.getenv("COLLECTION_NAME", defaults.COLLECTION_NAME)
 from log_config import setup_logger
-from modules.query import query
+from modules.query import query_stream
 from modules.ingestion import ingest, ingest_folder
 from modules.export import FailedFileRecord, build_failed_records, generate_failed_files_excel
 
@@ -445,27 +446,34 @@ if st.session_state["page"] == "chat":
         st.info("No documents have been indexed yet. Go to **Upload & Ingest** to add documents before chatting.")
 
     if question := st.chat_input("Ask a question about your documents...", disabled=(chunk_count == 0)):
-        # Add user message
         st.session_state["messages"].append({"role": "user", "content": question})
 
-        # Run query
-        with st.spinner("Thinking..."):
-            try:
-                result = query(question)
-                st.session_state["messages"].append({
-                    "role":    "assistant",
-                    "content": result["answer"],
-                    "sources": result["sources"],
-                    "elapsed": result["elapsed"],
-                })
-            except Exception as e:
-                logger.error(f"QUERY_ERROR | q={question!r} | error={e}")
-                st.session_state["messages"].append({
-                    "role":    "assistant",
-                    "content": f"Error: {str(e)}",
-                    "sources": [],
-                    "elapsed": None,
-                })
+        # Render user bubble inline (history loop already ran above this block)
+        safe_q = html.escape(question)
+        st.markdown(f'<div class="user-msg">{safe_q}</div>', unsafe_allow_html=True)
+
+        try:
+            with st.spinner("Searching documents..."):
+                sources, token_iter, t_start = query_stream(question)
+
+            # Stream tokens; returns full answer string when exhausted
+            answer = st.write_stream(token_iter)
+            elapsed = round(time.time() - t_start, 1)
+
+            st.session_state["messages"].append({
+                "role":    "assistant",
+                "content": answer,
+                "sources": sources,
+                "elapsed": elapsed,
+            })
+        except Exception as e:
+            logger.error(f"QUERY_ERROR | q={question!r} | error={e}")
+            st.session_state["messages"].append({
+                "role":    "assistant",
+                "content": f"Error: {str(e)}",
+                "sources": [],
+                "elapsed": None,
+            })
 
         st.rerun()
 
