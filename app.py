@@ -1,4 +1,5 @@
 import os
+import html
 import pathlib
 import streamlit as st
 from datetime import datetime
@@ -395,15 +396,17 @@ if st.session_state["page"] == "chat":
     else:
         for mi, msg in enumerate(st.session_state["messages"]):
             if msg["role"] == "user":
-                st.markdown(f'<div class="user-msg">{msg["content"]}</div>',
+                safe_content = html.escape(msg["content"])
+                st.markdown(f'<div class="user-msg">{safe_content}</div>',
                             unsafe_allow_html=True)
             else:
                 elapsed_html = ""
                 if msg.get("elapsed"):
                     elapsed_html = f'<div style="font-size:11px;color:#5a5f7a;margin-top:8px;">⏱ {msg["elapsed"]}s</div>'
 
+                safe_content = html.escape(msg["content"]).replace("\n", "<br>")
                 st.markdown(
-                    f'<div class="bot-msg">{msg["content"]}{elapsed_html}</div>',
+                    f'<div class="bot-msg">{safe_content}{elapsed_html}</div>',
                     unsafe_allow_html=True
                 )
 
@@ -474,6 +477,9 @@ elif st.session_state["page"] == "docs":
 
     st.markdown("### Documents")
 
+    if st.session_state["pdf_viewer_open"] and st.session_state["pdf_viewer_path"]:
+        _pdf_viewer_modal()
+
     search = st.text_input("🔍  Search documents...", placeholder="Type to filter...")
 
     all_pdfs = get_all_pdfs()
@@ -504,11 +510,18 @@ elif st.session_state["page"] == "docs":
                     """, unsafe_allow_html=True)
                 with col2:
                     if st.button("Open", key=f"open_{pdf_path}"):
-                        try:
-                            os.startfile(pdf_path)
-                        except Exception:
-                            st.warning("Cannot open file from inside container. "
-                                       "Access it directly from your host machine.")
+                        if pdf.exists():
+                            st.session_state.update({
+                                "pdf_viewer_open":     True,
+                                "pdf_viewer_path":     pdf_path,
+                                "pdf_viewer_filename": pdf.name,
+                                "pdf_viewer_page":     1,
+                                "pdf_viewer_ref_page": 1,
+                                "pdf_viewer_total":    get_pdf_page_count(pdf_path),
+                            })
+                        else:
+                            st.toast(f"File not found: {pdf.name}", icon="⚠️")
+                        st.rerun()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

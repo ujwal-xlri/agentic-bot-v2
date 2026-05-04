@@ -17,7 +17,11 @@ COLLECTION_NAME = "tgtransco"
 
 # Retrieval
 CHUNK_SIZE  = "512"
-RETRIEVAL_K = "8"
+RETRIEVAL_K = "20"
+
+# Reranker
+RERANKER_MODEL = "BAAI/bge-reranker-base"
+RERANKER_TOP_N = "4"
 
 # Paths
 PDF_DIR = "/app/pdfs"

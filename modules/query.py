@@ -28,7 +28,11 @@ def query(question: str) -> dict:
     docs = retriever.invoke(question)
     logger.info(f"QUERY_RETRIEVAL | elapsed={round(time.time() - t0, 3)}s | chunks={len(docs)}")
 
-    # Stage 2: LLM inference
+    # Stage 2: rerank
+    from modules.reranker import rerank
+    docs = rerank(question, docs)
+
+    # Stage 3: LLM inference
     t1     = time.time()
     chain  = load_qa_chain(llm, chain_type="stuff")
     result = chain.invoke({"input_documents": docs, "question": question})

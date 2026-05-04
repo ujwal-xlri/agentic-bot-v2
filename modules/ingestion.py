@@ -57,16 +57,14 @@ _chunker   = _make_chunker()
 # ---------------------------------------------------------------------------
 
 def _get_collection() -> chromadb.Collection:
-    host = os.getenv("CHROMA_HOST", defaults.CHROMA_HOST)
-    port = int(os.getenv("CHROMA_PORT", defaults.CHROMA_PORT))
-    logger.debug(f"CHROMA_CONNECT | host={host!r} | port={port} | collection={COLLECTION_NAME!r}")
+    from pipeline import chroma_client
+    logger.debug(f"CHROMA_CONNECT | collection={COLLECTION_NAME!r}")
     try:
-        client     = chromadb.HttpClient(host=host, port=port)
-        collection = client.get_or_create_collection(COLLECTION_NAME)
+        collection = chroma_client.get_or_create_collection(COLLECTION_NAME)
         logger.debug(f"CHROMA_CONNECT_OK | collection={COLLECTION_NAME!r}")
         return collection
     except Exception:
-        logger.exception(f"CHROMA_CONNECT_FAIL | host={host!r} | port={port} | collection={COLLECTION_NAME!r}")
+        logger.exception(f"CHROMA_CONNECT_FAIL | collection={COLLECTION_NAME!r}")
         raise
 
 

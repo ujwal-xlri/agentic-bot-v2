@@ -8,6 +8,7 @@ logger = setup_logger("pipeline")
 from langchain_ollama import OllamaLLM
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
+from sentence_transformers import CrossEncoder
 import chromadb
 
 # ── Config from environment ───────────────────────────────────────────────────
@@ -17,12 +18,16 @@ OLLAMA_PORT    = os.getenv("OLLAMA_PORT",    defaults.OLLAMA_PORT)
 CHROMA_HOST    = os.getenv("CHROMA_HOST",    defaults.CHROMA_HOST)
 CHROMA_PORT    = int(os.getenv("CHROMA_PORT", defaults.CHROMA_PORT))
 PDF_DIR        = os.getenv("PDF_DIR",        defaults.PDF_DIR)
-COLLECTION     = os.getenv("COLLECTION_NAME", defaults.COLLECTION_NAME)
+COLLECTION      = os.getenv("COLLECTION_NAME", defaults.COLLECTION_NAME)
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", defaults.EMBEDDING_MODEL)
+RERANKER_MODEL  = os.getenv("RERANKER_MODEL",  defaults.RERANKER_MODEL)
 
 # ── Models (initialised once, reused by app.py via import) ───────────────────
 logger.info(f"PIPELINE_INIT | loading embedding model={EMBEDDING_MODEL!r}")
 embedder = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
+
+logger.info(f"PIPELINE_INIT | loading reranker model={RERANKER_MODEL!r}")
+reranker = CrossEncoder(RERANKER_MODEL)
 
 logger.info(f"PIPELINE_INIT | connecting to Ollama model={OLLAMA_MODEL!r}")
 llm = OllamaLLM(
@@ -45,7 +50,8 @@ def get_vectorstore():
     return _vectorstore
 
 from modules.ingestion import ingest, ingest_folder  # noqa: F401
-from modules.query import query  # noqa: F401
+from modules.query import query                      # noqa: F401
+from modules.reranker import rerank                  # noqa: F401
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
