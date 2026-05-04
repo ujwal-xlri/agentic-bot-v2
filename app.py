@@ -162,6 +162,21 @@ st.markdown("""
         padding-top: 6px;
         margin-bottom: 2px;
     }
+
+    /* Home mode-selection cards */
+    .mode-card {
+        background: #1a1d27;
+        border: 1px solid #2a2d3a;
+        border-radius: 12px;
+        padding: 48px 32px;
+        text-align: center;
+        margin-bottom: 16px;
+        transition: border-color 0.2s;
+    }
+    .mode-card:hover { border-color: #f0a500; }
+    .mode-icon  { font-size: 52px; margin-bottom: 16px; }
+    .mode-title { font-size: 22px; font-weight: 600; color: #e8eaf0; margin-bottom: 10px; }
+    .mode-desc  { font-size: 14px; color: #8b8fa8; line-height: 1.7; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -240,7 +255,7 @@ def get_pdf_page_count(pdf_path: str) -> int:
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
 if "page" not in st.session_state:
-    st.session_state["page"] = "chat"
+    st.session_state["page"] = "home"
 if "last_ingested" not in st.session_state:
     st.session_state["last_ingested"] = "Never"
 if "failed_upload_excel" not in st.session_state:
@@ -321,20 +336,22 @@ with st.sidebar:
     if task_running:
         st.warning("⏳ Task in progress — navigation locked")
 
-    if st.button("💬  Chat", use_container_width=True, disabled=task_running,
-                 type="primary" if st.session_state["page"] == "chat" else "secondary"):
-        st.session_state["page"] = "chat"
-        st.rerun()
+    _cur = st.session_state["page"]
 
-    if st.button("📁  Documents", use_container_width=True, disabled=task_running,
-                 type="primary" if st.session_state["page"] == "docs" else "secondary"):
-        st.session_state["page"] = "docs"
-        st.rerun()
+    if _cur != "home":
+        if st.button("← Back", use_container_width=True, disabled=task_running):
+            st.session_state["page"] = "home"
+            st.rerun()
 
-    if st.button("⬆️  Upload & Ingest", use_container_width=True, disabled=task_running,
-                 type="primary" if st.session_state["page"] == "upload" else "secondary"):
-        st.session_state["page"] = "upload"
-        st.rerun()
+    if _cur in ("chat", "docs"):
+        if st.button("💬  Chat", use_container_width=True, disabled=task_running,
+                     type="primary" if _cur == "chat" else "secondary"):
+            st.session_state["page"] = "chat"
+            st.rerun()
+        if st.button("📁  Documents", use_container_width=True, disabled=task_running,
+                     type="primary" if _cur == "docs" else "secondary"):
+            st.session_state["page"] = "docs"
+            st.rerun()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -376,9 +393,48 @@ def _pdf_viewer_modal():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# PAGE: HOME
+# ══════════════════════════════════════════════════════════════════════════════
+if st.session_state["page"] == "home":
+
+    st.markdown("### TGTRANSCO Bot")
+    st.markdown(
+        "<div style='color:#8b8fa8;font-size:15px;margin-bottom:40px;'>"
+        "Choose a mode to get started.</div>",
+        unsafe_allow_html=True,
+    )
+
+    col1, col2 = st.columns(2, gap="large")
+
+    with col1:
+        st.markdown("""
+        <div class="mode-card">
+            <div class="mode-icon">💬</div>
+            <div class="mode-title">Query</div>
+            <div class="mode-desc">Ask questions about your indexed documents using AI-powered search.</div>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("Enter Query Mode", key="home_query", use_container_width=True, type="primary"):
+            st.session_state["page"] = "chat"
+            st.rerun()
+
+    with col2:
+        st.markdown("""
+        <div class="mode-card">
+            <div class="mode-icon">⬆️</div>
+            <div class="mode-title">Ingest</div>
+            <div class="mode-desc">Upload and index new PDF documents into the knowledge base.</div>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("Enter Ingest Mode", key="home_ingest", use_container_width=True, type="secondary"):
+            st.session_state["page"] = "upload"
+            st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # PAGE: CHAT
 # ══════════════════════════════════════════════════════════════════════════════
-if st.session_state["page"] == "chat":
+elif st.session_state["page"] == "chat":
 
     st.markdown("### Chat")
 

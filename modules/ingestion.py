@@ -48,8 +48,22 @@ def _make_chunker():
         logger.exception(f"SINGLETON_FAIL | component=HybridChunker | model={EMBEDDING_MODEL!r}")
         raise
 
-_converter = _make_converter()
-_chunker   = _make_chunker()
+_converter = None
+_chunker   = None
+
+
+def _get_converter():
+    global _converter
+    if _converter is None:
+        _converter = _make_converter()
+    return _converter
+
+
+def _get_chunker():
+    global _chunker
+    if _chunker is None:
+        _chunker = _make_chunker()
+    return _chunker
 
 
 # ---------------------------------------------------------------------------
@@ -57,10 +71,10 @@ _chunker   = _make_chunker()
 # ---------------------------------------------------------------------------
 
 def _get_collection() -> chromadb.Collection:
-    from pipeline import chroma_client
+    from pipeline import get_chroma_client
     logger.debug(f"CHROMA_CONNECT | collection={COLLECTION_NAME!r}")
     try:
-        collection = chroma_client.get_or_create_collection(COLLECTION_NAME)
+        collection = get_chroma_client().get_or_create_collection(COLLECTION_NAME)
         logger.debug(f"CHROMA_CONNECT_OK | collection={COLLECTION_NAME!r}")
         return collection
     except Exception:
@@ -145,7 +159,7 @@ def ingest(pdf_path: str) -> tuple[int, int]:
     logger.debug(f"DOCLING_CONVERT_START | file={filename!r}")
     try:
         t0     = time.time()
-        result = _converter.convert(pdf_path)
+        result = _get_converter().convert(pdf_path)
         md     = result.document.export_to_markdown().strip()
         logger.info(f"DOCLING_CONVERT_OK | file={filename!r} | elapsed={round(time.time()-t0,3)}s | chars={len(md)}")
     except Exception:
@@ -163,7 +177,7 @@ def ingest(pdf_path: str) -> tuple[int, int]:
     logger.debug(f"DOCLING_CHUNK_START | file={filename!r}")
     try:
         t0     = time.time()
-        chunks = list(_chunker.chunk(result.document))
+        chunks = list(_get_chunker().chunk(result.document))
         logger.info(f"DOCLING_CHUNK_OK | file={filename!r} | elapsed={round(time.time()-t0,3)}s | raw_chunks={len(chunks)}")
     except Exception:
         logger.exception(f"DOCLING_CHUNK_FAIL | file={filename!r}")

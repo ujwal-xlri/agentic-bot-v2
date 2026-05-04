@@ -14,7 +14,8 @@ def rerank(question: str, docs: list) -> list:
     Rerank retrieved docs using a cross-encoder model.
     Returns the top RERANKER_TOP_N docs sorted by relevance score.
     """
-    from pipeline import reranker as _model
+    from pipeline import get_reranker
+    _model = get_reranker()
 
     if not docs:
         return docs

@@ -63,10 +63,10 @@ def query(question: str) -> dict:
     Run a RAG query. Returns dict with 'answer', 'sources', and 'elapsed'.
     Sources is a list of dicts: {filename, page_number, full_path, folder}.
     """
-    from pipeline import llm
+    from pipeline import get_llm
     docs, total_start = _retrieve_and_rerank(question)
 
-    chain = _RAG_PROMPT | llm | StrOutputParser()
+    chain = _RAG_PROMPT | get_llm() | StrOutputParser()
 
     t1 = time.time()
     answer = chain.invoke({"context": _format_docs(docs), "question": question})
@@ -84,10 +84,10 @@ def query_stream(question: str):
     Returns (sources, token_iterator, start_time) so the caller can measure
     total elapsed (retrieval + rerank + LLM generation) after consuming the stream.
     """
-    from pipeline import llm
+    from pipeline import get_llm
     docs, total_start = _retrieve_and_rerank(question)
 
-    chain = _RAG_PROMPT | llm | StrOutputParser()
+    chain = _RAG_PROMPT | get_llm() | StrOutputParser()
     sources = _extract_sources(docs)
     token_iter = chain.stream({"context": _format_docs(docs), "question": question})
 
