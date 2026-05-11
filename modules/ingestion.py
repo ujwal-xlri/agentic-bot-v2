@@ -66,6 +66,18 @@ def _get_chunker():
     return _chunker
 
 
+def get_converter():
+    return _get_converter()
+
+
+def get_chunker():
+    return _get_chunker()
+
+
+def ingest_models_ready() -> bool:
+    return _converter is not None and _chunker is not None
+
+
 # ---------------------------------------------------------------------------
 # Chroma helpers
 # ---------------------------------------------------------------------------

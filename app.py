@@ -191,7 +191,9 @@ def load_chroma_client():
 
 # Load at startup
 chroma_client = load_chroma_client()
-logger.info("APP_START | Streamlit app initialized")
+if not st.session_state.get("_app_logged"):
+    logger.info("APP_START | Streamlit app initialized")
+    st.session_state["_app_logged"] = True
 
 
 # ── Service status checks ─────────────────────────────────────────────────────
@@ -218,6 +220,14 @@ def get_collection_count():
         return col.count()
     except Exception:
         return 0
+
+
+def find_existing_filenames(filenames: list) -> list:
+    try:
+        col = chroma_client.get_or_create_collection(COLLECTION_NAME)
+        return [f for f in filenames if col.get(where={"filename": f}, limit=1)["ids"]]
+    except Exception:
+        return []
 
 
 def get_all_pdfs() -> dict:
@@ -272,6 +282,14 @@ if "bulk_ingest_triggered" not in st.session_state:
     st.session_state["bulk_ingest_triggered"] = False
 if "pending_upload_files" not in st.session_state:
     st.session_state["pending_upload_files"] = []
+if "awaiting_duplicate_confirm" not in st.session_state:
+    st.session_state["awaiting_duplicate_confirm"] = False
+if "duplicate_files" not in st.session_state:
+    st.session_state["duplicate_files"] = []
+if "models_ready" not in st.session_state:
+    st.session_state["models_ready"] = False
+if "model_load_time" not in st.session_state:
+    st.session_state["model_load_time"] = None
 if "upload_ingest_results" not in st.session_state:
     st.session_state["upload_ingest_results"] = []
 if "upload_ingest_total" not in st.session_state:
@@ -290,9 +308,15 @@ if "pdf_viewer_total" not in st.session_state:
     st.session_state["pdf_viewer_total"] = 1
 if "pdf_viewer_filename" not in st.session_state:
     st.session_state["pdf_viewer_filename"] = ""
+if "pending_query" not in st.session_state:
+    st.session_state["pending_query"] = None
 
 
 # ── Task lock ─────────────────────────────────────────────────────────────────
+# If a query is queued, lock before any widget is rendered this pass so that
+# sidebar nav, source buttons, and chat input are all disabled.
+if st.session_state["pending_query"] is not None:
+    st.session_state["task_in_progress"] = True
 task_running = st.session_state["task_in_progress"]
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -303,9 +327,9 @@ with st.sidebar:
     # Service status
     st.markdown('<div class="section-label">System Status</div>', unsafe_allow_html=True)
 
-    chroma_ok = check_chromadb()
-    ollama_ok = check_ollama()
-    model_name = os.getenv("OLLAMA_MODEL", defaults.OLLAMA_MODEL)
+    chroma_ok   = check_chromadb()
+    ollama_ok   = check_ollama()
+    model_name  = os.getenv("OLLAMA_MODEL", defaults.OLLAMA_MODEL)
     chunk_count = get_collection_count()
 
     st.markdown(f"""
@@ -336,29 +360,32 @@ with st.sidebar:
     if task_running:
         st.warning("⏳ Task in progress — navigation locked")
 
-    _cur = st.session_state["page"]
+    _cur     = st.session_state["page"]
+    _loading = (_cur == "loading")
+    _mode    = st.session_state["mode"]
 
-    if _cur != "home":
+    if _cur not in ("home", "loading"):
         if st.button("← Back", use_container_width=True, disabled=task_running):
             st.session_state["page"] = "home"
             st.rerun()
 
-    _mode = st.session_state["mode"]
-
     if _mode == "query":
-        if st.button("💬  Chat", use_container_width=True, disabled=task_running,
+        if st.button("💬  Chat", use_container_width=True,
+                     disabled=task_running or _loading,
                      type="primary" if _cur == "chat" else "secondary"):
             st.session_state["page"] = "chat"
             st.rerun()
 
     if _mode == "ingest":
-        if st.button("⬆️  Ingest", use_container_width=True, disabled=task_running,
+        if st.button("⬆️  Ingest", use_container_width=True,
+                     disabled=task_running or _loading,
                      type="primary" if _cur == "upload" else "secondary"):
             st.session_state["page"] = "upload"
             st.rerun()
 
     if _mode in ("query", "ingest"):
-        if st.button("📁  Documents", use_container_width=True, disabled=task_running,
+        if st.button("📁  Documents", use_container_width=True,
+                     disabled=task_running or _loading,
                      type="primary" if _cur == "docs" else "secondary"):
             st.session_state["page"] = "docs"
             st.rerun()
@@ -369,6 +396,10 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════════════════
 @st.dialog("📄 Document Viewer", width="large")
 def _pdf_viewer_modal():
+    # Reset the open flag immediately so external reruns (query submit, etc.)
+    # don't reopen the dialog — navigation buttons set it back before rerunning.
+    st.session_state["pdf_viewer_open"] = False
+
     fp     = st.session_state["pdf_viewer_path"]
     cur_pg = st.session_state["pdf_viewer_page"]
     total  = st.session_state["pdf_viewer_total"]
@@ -381,17 +412,20 @@ def _pdf_viewer_modal():
     with c1:
         if st.button("← Prev", key="pdf_prev",
                      disabled=(cur_pg <= 1), use_container_width=True):
+            st.session_state["pdf_viewer_open"] = True
             st.session_state["pdf_viewer_page"] -= 1
             st.rerun()
     with c2:
         if st.button("Next →", key="pdf_next",
                      disabled=(cur_pg >= total), use_container_width=True):
+            st.session_state["pdf_viewer_open"] = True
             st.session_state["pdf_viewer_page"] += 1
             st.rerun()
     with c3:
         if st.button(f"↩ p.{ref_pg}", key="pdf_ref",
                      disabled=(cur_pg == ref_pg), use_container_width=True,
                      help=f"Jump to referenced page {ref_pg}"):
+            st.session_state["pdf_viewer_open"] = True
             st.session_state["pdf_viewer_page"] = ref_pg
             st.rerun()
 
@@ -425,8 +459,14 @@ if st.session_state["page"] == "home":
         </div>
         """, unsafe_allow_html=True)
         if st.button("Enter Query Mode", key="home_query", use_container_width=True, type="primary"):
-            st.session_state["page"] = "chat"
+            from pipeline import query_models_ready
             st.session_state["mode"] = "query"
+            if query_models_ready():
+                st.session_state["models_ready"] = True
+                st.session_state["page"] = "chat"
+            else:
+                st.session_state["models_ready"] = False
+                st.session_state["page"] = "loading"
             st.rerun()
 
     with col2:
@@ -438,9 +478,60 @@ if st.session_state["page"] == "home":
         </div>
         """, unsafe_allow_html=True)
         if st.button("Enter Ingest Mode", key="home_ingest", use_container_width=True, type="secondary"):
-            st.session_state["page"] = "upload"
+            from modules.ingestion import ingest_models_ready
             st.session_state["mode"] = "ingest"
+            if ingest_models_ready():
+                st.session_state["models_ready"] = True
+                st.session_state["page"] = "upload"
+            else:
+                st.session_state["models_ready"] = False
+                st.session_state["page"] = "loading"
             st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: LOADING
+# ══════════════════════════════════════════════════════════════════════════════
+elif st.session_state["page"] == "loading":
+
+    _mode = st.session_state["mode"]
+    _label = "Query" if _mode == "query" else "Ingest"
+    st.markdown(f"### Initializing {_label} Models")
+
+    t0 = time.time()
+
+    if _mode == "query":
+        from pipeline import get_embedder, get_reranker, get_llm, get_vectorstore
+        with st.status("Loading models…", expanded=True) as _status:
+            st.write("Loading embedding model…")
+            get_embedder()
+            st.write("Loading reranker…")
+            get_reranker()
+            st.write("Connecting to LLM…")
+            get_llm()
+            st.write("Preparing vector store…")
+            get_vectorstore()
+            _elapsed = round(time.time() - t0, 1)
+            _status.update(label=f"Ready — {_elapsed}s", state="complete")
+    else:
+        from modules.ingestion import get_converter, get_chunker
+        from pipeline import get_embedder, get_vectorstore
+        with st.status("Loading models…", expanded=True) as _status:
+            st.write("Loading document converter…")
+            get_converter()
+            st.write("Loading document chunker…")
+            get_chunker()
+            st.write("Loading embedding model…")
+            get_embedder()
+            st.write("Preparing vector store…")
+            get_vectorstore()
+            _elapsed = round(time.time() - t0, 1)
+            _status.update(label=f"Ready — {_elapsed}s", state="complete")
+
+    st.session_state["models_ready"] = True
+    st.session_state["model_load_time"] = _elapsed
+    st.session_state["page"] = "chat" if _mode == "query" else "upload"
+    st.rerun()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -493,6 +584,7 @@ elif st.session_state["page"] == "chat":
                                 key=f"src_{mi}_{si}",
                                 use_container_width=True,
                                 help=f"{fname} — page {pg}",
+                                disabled=task_running,
                             ):
                                 fp = src.get("full_path", "")
                                 if fp and pathlib.Path(fp).exists():
@@ -513,21 +605,28 @@ elif st.session_state["page"] == "chat":
     if chunk_count == 0:
         st.info("No documents have been indexed yet. Go to **Upload & Ingest** to add documents before chatting.")
 
-    if question := st.chat_input("Ask a question about your documents...", disabled=(chunk_count == 0)):
+    # Phase 1: capture question, lock UI, rerun so all buttons render disabled.
+    if question := st.chat_input(
+        "Ask a question about your documents...",
+        disabled=(chunk_count == 0 or task_running),
+    ):
         st.session_state["messages"].append({"role": "user", "content": question})
+        st.session_state["pending_query"] = question
+        st.rerun()
 
-        # Render user bubble inline (history loop already ran above this block)
-        safe_q = html.escape(question)
-        st.markdown(f'<div class="user-msg">{safe_q}</div>', unsafe_allow_html=True)
+    # Phase 2: execute the queued query (all widgets already rendered disabled).
+    if st.session_state["pending_query"] is not None:
+        question = st.session_state["pending_query"]
+        st.session_state["pending_query"] = None
 
         try:
             with st.spinner("Searching documents..."):
                 sources, token_iter, t_start = query_stream(question)
 
-            # Stream tokens; returns full answer string when exhausted
             answer = st.write_stream(token_iter)
             elapsed = round(time.time() - t_start, 1)
 
+            logger.info(f"QUERY_OK | elapsed={elapsed}s | sources={len(sources)} | q={question!r}")
             st.session_state["messages"].append({
                 "role":    "assistant",
                 "content": answer,
@@ -543,6 +642,7 @@ elif st.session_state["page"] == "chat":
                 "elapsed": None,
             })
 
+        st.session_state["task_in_progress"] = False
         st.rerun()
 
 
@@ -688,16 +788,46 @@ elif st.session_state["page"] == "upload":
     )
 
     if uploaded:
-        if st.button("⚡ Ingest All", type="primary"):
+        if st.button("⚡ Ingest All", type="primary",
+                     disabled=st.session_state["awaiting_duplicate_confirm"]):
+            pending = [{"name": f.name, "size": f.size, "bytes": f.read()} for f in uploaded]
+            duplicates = find_existing_filenames([f["name"] for f in pending])
             st.session_state["upload_ingest_results"] = []
             st.session_state["upload_ingest_total"] = 0
-            st.session_state["pending_upload_files"] = [
-                {"name": f.name, "size": f.size, "bytes": f.read()}
-                for f in uploaded
-            ]
-            st.session_state["ingest_upload_triggered"] = True
-            st.session_state["task_in_progress"] = True
+            st.session_state["pending_upload_files"] = pending
+            if duplicates:
+                st.session_state["duplicate_files"] = duplicates
+                st.session_state["awaiting_duplicate_confirm"] = True
+            else:
+                st.session_state["ingest_upload_triggered"] = True
+                st.session_state["task_in_progress"] = True
             st.rerun()
+
+    # ── Duplicate confirmation prompt ─────────────────────────────────────────
+    if st.session_state["awaiting_duplicate_confirm"]:
+        dups = st.session_state["duplicate_files"]
+        dup_list = "\n".join(f"- **{n}**" for n in dups)
+        st.warning(
+            f"The following document{'s' if len(dups) > 1 else ''} "
+            f"{'are' if len(dups) > 1 else 'is'} already in the knowledge base:\n\n"
+            f"{dup_list}\n\n"
+            f"Re-ingesting will **permanently delete** the existing chunks from ChromaDB "
+            f"before adding new ones. This cannot be undone. Do you want to proceed?"
+        )
+        col_yes, col_no, _ = st.columns([1, 1, 4])
+        with col_yes:
+            if st.button("Yes, re-ingest", type="primary", use_container_width=True):
+                st.session_state["awaiting_duplicate_confirm"] = False
+                st.session_state["duplicate_files"] = []
+                st.session_state["ingest_upload_triggered"] = True
+                st.session_state["task_in_progress"] = True
+                st.rerun()
+        with col_no:
+            if st.button("Cancel", use_container_width=True):
+                st.session_state["awaiting_duplicate_confirm"] = False
+                st.session_state["duplicate_files"] = []
+                st.session_state["pending_upload_files"] = []
+                st.rerun()
 
     # Show results from last upload ingest
     if st.session_state["upload_ingest_results"]:

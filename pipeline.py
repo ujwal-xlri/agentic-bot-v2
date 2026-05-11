@@ -76,6 +76,10 @@ def get_vectorstore():
     return _vectorstore
 
 
+def query_models_ready() -> bool:
+    return all(x is not None for x in [_embedder, _reranker, _llm, _vectorstore])
+
+
 from modules.ingestion import ingest, ingest_folder  # noqa: F401
 from modules.query import query                      # noqa: F401
 from modules.reranker import rerank                  # noqa: F401
