@@ -76,6 +76,11 @@ def get_vectorstore():
     return _vectorstore
 
 
+def reset_vectorstore() -> None:
+    global _vectorstore
+    _vectorstore = None
+
+
 def query_models_ready() -> bool:
     return all(x is not None for x in [_embedder, _reranker, _llm, _vectorstore])
 

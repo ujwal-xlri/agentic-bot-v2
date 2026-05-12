@@ -16,8 +16,9 @@ CHROMA_PORT     = "8000"
 COLLECTION_NAME = "tgtransco"
 
 # Retrieval
-CHUNK_SIZE  = "512"
-RETRIEVAL_K = "20"
+CHUNK_SIZE      = "512"
+RETRIEVAL_K     = "20"
+MIN_CHUNK_CHARS = "50"
 
 # Reranker
 RERANKER_MODEL = "BAAI/bge-reranker-base"

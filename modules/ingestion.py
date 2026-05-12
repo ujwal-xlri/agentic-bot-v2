@@ -1,4 +1,5 @@
 import os
+import re
 import hashlib
 import pathlib
 import time
@@ -8,10 +9,13 @@ from log_config import setup_logger
 
 logger = setup_logger("ingestion")
 
-PDF_DIR         = os.getenv("PDF_DIR",         defaults.PDF_DIR)
-CHUNK_SIZE      = int(os.getenv("CHUNK_SIZE",  defaults.CHUNK_SIZE))
-COLLECTION_NAME = os.getenv("COLLECTION_NAME", defaults.COLLECTION_NAME)
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", defaults.EMBEDDING_MODEL)
+PDF_DIR         = os.getenv("PDF_DIR",            defaults.PDF_DIR)
+CHUNK_SIZE      = int(os.getenv("CHUNK_SIZE",     defaults.CHUNK_SIZE))
+COLLECTION_NAME = os.getenv("COLLECTION_NAME",    defaults.COLLECTION_NAME)
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL",    defaults.EMBEDDING_MODEL)
+MIN_CHUNK_CHARS = int(os.getenv("MIN_CHUNK_CHARS", defaults.MIN_CHUNK_CHARS))
+
+_BARE_NUMBER_RE = re.compile(r"^\d+$")
 
 # ---------------------------------------------------------------------------
 # Module-level singletons — initialised once, reused across all ingest calls
@@ -37,6 +41,29 @@ def _make_converter():
         logger.exception("SINGLETON_FAIL | component=DocumentConverter")
         raise
 
+
+def _make_ocr_converter():
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.datamodel.base_models import InputFormat
+
+    logger.debug("SINGLETON_INIT | component=OcrConverter")
+    try:
+        pipeline_options                    = PdfPipelineOptions()
+        pipeline_options.do_ocr             = True
+        pipeline_options.do_table_structure = True
+        converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+            }
+        )
+        logger.info("SINGLETON_READY | component=OcrConverter")
+        return converter
+    except Exception:
+        logger.exception("SINGLETON_FAIL | component=OcrConverter")
+        raise
+
+
 def _make_chunker():
     from docling.chunking import HybridChunker
     logger.debug(f"SINGLETON_INIT | component=HybridChunker | model={EMBEDDING_MODEL!r} | max_tokens={CHUNK_SIZE}")
@@ -48,8 +75,9 @@ def _make_chunker():
         logger.exception(f"SINGLETON_FAIL | component=HybridChunker | model={EMBEDDING_MODEL!r}")
         raise
 
-_converter = None
-_chunker   = None
+_converter     = None
+_ocr_converter = None
+_chunker       = None
 
 
 def _get_converter():
@@ -57,6 +85,13 @@ def _get_converter():
     if _converter is None:
         _converter = _make_converter()
     return _converter
+
+
+def _get_ocr_converter():
+    global _ocr_converter
+    if _ocr_converter is None:
+        _ocr_converter = _make_ocr_converter()
+    return _ocr_converter
 
 
 def _get_chunker():
@@ -125,6 +160,73 @@ def _chunk_id(filename: str, index: int) -> str:
     return hashlib.sha256(f"{filename}::{index}".encode()).hexdigest()
 
 
+def _clean_chunk(text: str, filename: str) -> str:
+    """
+    Strip header/footer artifacts from a chunk.
+    Removes lines that are bare page numbers or match the document's filename stem.
+    Both patterns are derived from the file being ingested — nothing is hardcoded.
+    """
+    stem      = pathlib.Path(filename).stem
+    stem_norm = re.sub(r"[\s_\-]+", " ", stem).strip().lower()
+
+    cleaned = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            cleaned.append(line)
+            continue
+        if _BARE_NUMBER_RE.match(s):
+            continue
+        if re.sub(r"[\s_\-]+", " ", s).strip().lower() == stem_norm:
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned).strip()
+
+
+def _pdfplumber_chunks(pdf_path: str, filename: str, folder: str) -> tuple[list, list, list]:
+    """
+    Extract text page-by-page via pdfplumber and split into chunks.
+    Used as a final fallback when both Docling passes (native + OCR) fail.
+    Tables are linearised row-by-row, which is imperfect but searchable.
+    """
+    import pdfplumber
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+    splitter  = RecursiveCharacterTextSplitter(
+        chunk_size=CHUNK_SIZE * 4,  # 4 chars ≈ 1 token
+        chunk_overlap=100,
+    )
+    texts, metadatas, ids = [], [], []
+    chunk_idx = 0
+
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            for page in pdf.pages:
+                page_text = page.extract_text() or ""
+                if not page_text.strip():
+                    continue
+                for split in splitter.split_text(page_text):
+                    text = _clean_chunk(split, filename)
+                    if len(text) < MIN_CHUNK_CHARS:
+                        continue
+                    texts.append(text)
+                    metadatas.append({
+                        "filename":  filename,
+                        "full_path": pdf_path,
+                        "folder":    folder,
+                        "headings":  "",
+                        "page":      page.page_number,
+                        "chunk_idx": chunk_idx,
+                    })
+                    ids.append(_chunk_id(filename, chunk_idx))
+                    chunk_idx += 1
+    except Exception:
+        logger.exception(f"PDFPLUMBER_FAIL | file={filename!r}")
+
+    logger.info(f"PDFPLUMBER_CHUNKS | file={filename!r} | chunks={len(texts)}")
+    return texts, metadatas, ids
+
+
 def _is_image_only(md: str) -> bool:
     lines = [l.strip() for l in md.splitlines() if l.strip()]
     return not lines or all(l == "<!-- image -->" for l in lines)
@@ -179,11 +281,33 @@ def ingest(pdf_path: str) -> tuple[int, int]:
         return 0, replaced
 
     if _is_image_only(md):
-        logger.error(
-            f"INGEST_UNREADABLE | file={filename!r} "
-            f"| reason=image_only_pdf — no text extracted"
-        )
-        return 0, replaced
+        logger.info(f"INGEST_OCR_RETRY | file={filename!r} | reason=image_only_native_pass")
+        try:
+            t0     = time.time()
+            result = _get_ocr_converter().convert(pdf_path)
+            md     = result.document.export_to_markdown().strip()
+            logger.info(f"DOCLING_OCR_OK | file={filename!r} | elapsed={round(time.time()-t0,3)}s | chars={len(md)}")
+        except Exception:
+            logger.exception(f"DOCLING_OCR_FAIL | file={filename!r}")
+            return 0, replaced
+
+        if _is_image_only(md):
+            logger.info(f"INGEST_PDFPLUMBER_FALLBACK | file={filename!r} | reason=image_only_after_ocr")
+            texts, metadatas, ids = _pdfplumber_chunks(pdf_path, filename, folder)
+            if not texts:
+                logger.error(f"INGEST_UNREADABLE | file={filename!r} | reason=all_methods_failed")
+                return 0, replaced
+            logger.debug(f"VECTORSTORE_WRITE_START | file={filename!r} | chunks={len(texts)}")
+            try:
+                t0          = time.time()
+                vectorstore = get_vectorstore()
+                vectorstore.add_texts(texts, metadatas=metadatas, ids=ids)
+                logger.info(f"VECTORSTORE_WRITE_OK | file={filename!r} | elapsed={round(time.time()-t0,3)}s | chunks={len(texts)}")
+            except Exception:
+                logger.exception(f"VECTORSTORE_WRITE_FAIL | file={filename!r} | chunks={len(texts)}")
+                return 0, replaced
+            logger.info(f"INGEST_DONE | file={filename!r} | chunks_added={len(texts)} | chunks_replaced={replaced} | method=pdfplumber")
+            return len(texts), replaced
 
     # --- Chunk ---
     logger.debug(f"DOCLING_CHUNK_START | file={filename!r}")
@@ -209,9 +333,9 @@ def ingest(pdf_path: str) -> tuple[int, int]:
     skipped   = 0
 
     for i, chunk in enumerate(chunks):
-        text = chunk.text.strip()
-        if not text:
-            logger.debug(f"CHUNK_SKIP_EMPTY | file={filename!r} | chunk_idx={i}")
+        text = _clean_chunk(chunk.text, filename)
+        if len(text) < MIN_CHUNK_CHARS:
+            logger.debug(f"CHUNK_SKIP_SHORT | file={filename!r} | chunk_idx={i} | chars={len(text)}")
             skipped += 1
             continue
 

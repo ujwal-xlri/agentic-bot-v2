@@ -25,158 +25,151 @@ st.set_page_config(
 # ── Custom CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    /* Base */
-    [data-testid="stAppViewContainer"] { background: #0f1117; }
-    [data-testid="stSidebar"] { background: #1a1d27; border-right: 1px solid #2a2d3a; }
-    
-    /* Hide default header */
+    /* ── Base ──────────────────────────────────────────────────────── */
+    [data-testid="stAppViewContainer"] { background: #ffffff; }
+    [data-testid="stSidebar"] { background: #5c6bc0; border-right: 1px solid #4a5ab0; }
     [data-testid="stHeader"] { background: transparent; }
-    
-    /* Chat messages */
+
+    /* ── Sidebar text ───────────────────────────────────────────────── */
+    [data-testid="stSidebar"],
+    [data-testid="stSidebar"] p, [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] div, [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3 { color: #ffffff; }
+    [data-testid="stSidebar"] hr { border-color: rgba(255,255,255,0.25); }
+    [data-testid="stSidebar"] .section-label { color: rgba(255,255,255,0.65); }
+
+    /* ── Sidebar buttons ────────────────────────────────────────────── */
+    [data-testid="stSidebar"] button {
+        background-color: rgba(255,255,255,0.12) !important;
+        color: #ffffff !important;
+        border: 1px solid rgba(255,255,255,0.35) !important;
+    }
+    [data-testid="stSidebar"] button:hover {
+        background-color: rgba(255,255,255,0.22) !important;
+        border-color: rgba(255,255,255,0.6) !important;
+    }
+    [data-testid="stSidebar"] [data-testid="baseButton-primary"] {
+        background-color: rgba(255,255,255,0.28) !important;
+        border-color: rgba(255,255,255,0.65) !important;
+        font-weight: 600 !important;
+    }
+
+    /* ── Chat messages ──────────────────────────────────────────────── */
     .user-msg {
-        background: #1e2130;
-        border: 1px solid #2a2d3a;
+        background: #eef1fb; border: 1px solid #c5cae9;
         border-radius: 12px 12px 4px 12px;
-        padding: 14px 18px;
-        margin: 8px 0;
-        color: #e8eaf0;
-        font-size: 15px;
-        line-height: 1.6;
-        max-width: 80%;
-        margin-left: auto;
+        padding: 14px 18px; margin: 8px 0;
+        color: #1a1b2e; font-size: 15px; line-height: 1.6;
+        max-width: 80%; margin-left: auto;
     }
     .bot-msg {
-        background: #161922;
-        border: 1px solid #2a2d3a;
-        border-left: 3px solid #f0a500;
+        background: #f5f6ff; border: 1px solid #c5cae9;
+        border-left: 3px solid #5c6bc0;
         border-radius: 4px 12px 12px 12px;
-        padding: 14px 18px;
-        margin: 8px 0;
-        color: #e8eaf0;
-        font-size: 15px;
-        line-height: 1.7;
-        max-width: 90%;
+        padding: 14px 18px; margin: 8px 0;
+        color: #1a1b2e; font-size: 15px; line-height: 1.7; max-width: 90%;
     }
-    
-    /* Source chips */
+
+    /* ── Source chips ───────────────────────────────────────────────── */
     .source-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-        margin-top: 10px;
-        padding-top: 10px;
-        border-top: 1px solid #2a2d3a;
+        display: flex; flex-wrap: wrap; gap: 6px;
+        margin-top: 10px; padding-top: 10px; border-top: 1px solid #c5cae9;
     }
     .source-chip {
-        background: #1e2130;
-        border: 1px solid #f0a500;
-        border-radius: 20px;
-        padding: 3px 10px;
-        font-size: 11px;
-        color: #f0a500;
-        white-space: nowrap;
+        background: #eef1fb; border: 1px solid #5c6bc0;
+        border-radius: 20px; padding: 3px 10px;
+        font-size: 11px; color: #5c6bc0; white-space: nowrap;
     }
-    .source-chip span {
-        color: #8b8fa8;
-        margin-left: 4px;
-    }
-    
-    /* Status indicators */
+    .source-chip span { color: #757575; margin-left: 4px; }
+
+    /* ── Status indicators ──────────────────────────────────────────── */
     .status-dot {
-        display: inline-block;
-        width: 8px; height: 8px;
-        border-radius: 50%;
-        margin-right: 6px;
+        display: inline-block; width: 8px; height: 8px;
+        border-radius: 50%; margin-right: 6px;
     }
-    .status-ok   { background: #22c55e; }
-    .status-warn { background: #f0a500; }
+    .status-ok   { background: #62bc62; }
+    .status-warn { background: #c67605; }
     .status-err  { background: #ef4444; }
-    
-    /* Section headers */
+
+    /* ── Section headers ────────────────────────────────────────────── */
     .section-label {
-        font-size: 11px;
-        font-weight: 600;
-        letter-spacing: 0.1em;
-        color: #5a5f7a;
-        text-transform: uppercase;
-        margin: 16px 0 8px;
+        font-size: 11px; font-weight: 600; letter-spacing: 0.1em;
+        color: #9e9ea8; text-transform: uppercase; margin: 16px 0 8px;
     }
-    
-    /* Document cards */
+
+    /* ── Document / delete cards ────────────────────────────────────── */
     .doc-card {
-        background: #1a1d27;
-        border: 1px solid #2a2d3a;
-        border-radius: 8px;
-        padding: 10px 14px;
-        margin: 4px 0;
-        cursor: pointer;
-        transition: border-color 0.2s;
+        background: #f5f6ff; border: 1px solid #c5cae9;
+        border-radius: 8px; padding: 10px 14px; margin: 4px 0;
+        cursor: pointer; transition: border-color 0.2s;
     }
-    .doc-card:hover { border-color: #f0a500; }
-    .doc-name { color: #e8eaf0; font-size: 14px; font-weight: 500; }
-    .doc-meta { color: #5a5f7a; font-size: 12px; margin-top: 2px; }
-    
-    /* Folder header */
+    .doc-card:hover { border-color: #5c6bc0; }
+    .doc-name { color: #1a1b2e; font-size: 14px; font-weight: 500; }
+    .doc-meta { color: #757575; font-size: 12px; margin-top: 2px; }
+
+    /* ── Folder header ──────────────────────────────────────────────── */
     .folder-header {
-        font-size: 13px;
-        font-weight: 600;
-        color: #f0a500;
-        margin: 16px 0 6px;
-        padding-bottom: 4px;
-        border-bottom: 1px solid #2a2d3a;
+        font-size: 13px; font-weight: 600; color: #5c6bc0;
+        margin: 16px 0 6px; padding-bottom: 4px; border-bottom: 1px solid #c5cae9;
     }
-    
-    /* Input styling */
+
+    /* ── Chat input ─────────────────────────────────────────────────── */
     [data-testid="stChatInput"] textarea {
-        background: #1a1d27 !important;
-        border: 1px solid #2a2d3a !important;
-        color: #e8eaf0 !important;
-        border-radius: 8px !important;
-    }
-    
-    /* Spinner */
-    .thinking {
-        color: #5a5f7a;
-        font-size: 13px;
-        font-style: italic;
-        padding: 8px 0;
+        background: #f5f6ff !important; border: 1px solid #c5cae9 !important;
+        color: #1a1b2e !important; border-radius: 8px !important;
     }
 
-    /* Welcome screen */
-    .welcome {
-        text-align: center;
-        padding: 60px 20px;
-        color: #5a5f7a;
-    }
-    .welcome h2 { color: #e8eaf0; font-size: 24px; font-weight: 500; margin-bottom: 8px; }
+    /* ── Misc ───────────────────────────────────────────────────────── */
+    .thinking { color: #9e9ea8; font-size: 13px; font-style: italic; padding: 8px 0; }
+    .welcome { text-align: center; padding: 60px 20px; color: #9e9ea8; }
+    .welcome h2 { color: #1a1b2e; font-size: 24px; font-weight: 500; margin-bottom: 8px; }
     .welcome p  { font-size: 15px; line-height: 1.6; }
-
-    /* Source reference buttons (below bot messages) */
     .src-label {
-        font-size: 10px;
-        font-weight: 600;
-        letter-spacing: 0.08em;
-        color: #5a5f7a;
-        text-transform: uppercase;
-        border-top: 1px solid #2a2d3a;
-        padding-top: 6px;
-        margin-bottom: 2px;
+        font-size: 10px; font-weight: 600; letter-spacing: 0.08em;
+        color: #9e9ea8; text-transform: uppercase;
+        border-top: 1px solid #c5cae9; padding-top: 6px; margin-bottom: 2px;
     }
 
-    /* Home mode-selection cards */
+    /* ── Home mode cards ────────────────────────────────────────────── */
     .mode-card {
-        background: #1a1d27;
-        border: 1px solid #2a2d3a;
-        border-radius: 12px;
-        padding: 48px 32px;
-        text-align: center;
-        margin-bottom: 16px;
-        transition: border-color 0.2s;
+        background: #f5f6ff; border: 1px solid #c5cae9;
+        border-radius: 12px; padding: 48px 32px; text-align: center;
+        margin-bottom: 16px; transition: border-color 0.2s;
     }
-    .mode-card:hover { border-color: #f0a500; }
+    .mode-card:hover { border-color: #5c6bc0; }
     .mode-icon  { font-size: 52px; margin-bottom: 16px; }
-    .mode-title { font-size: 22px; font-weight: 600; color: #e8eaf0; margin-bottom: 10px; }
-    .mode-desc  { font-size: 14px; color: #8b8fa8; line-height: 1.7; }
+    .mode-title { font-size: 22px; font-weight: 600; color: #1a1b2e; margin-bottom: 10px; }
+    .mode-desc  { font-size: 14px; color: #616161; line-height: 1.7; }
+
+    /* ── Chunk cards ────────────────────────────────────────────────── */
+    .chunk-card {
+        background: #f5f6ff; border: 1px solid #c5cae9;
+        border-radius: 8px; padding: 12px 14px; height: 130px;
+        overflow: hidden; cursor: pointer; transition: border-color 0.2s;
+        display: flex; flex-direction: column; gap: 6px;
+    }
+    .chunk-card:hover { border-color: #5c6bc0; }
+    .chunk-card-meta {
+        font-size: 10px; font-weight: 600; color: #5c6bc0;
+        letter-spacing: 0.06em; white-space: nowrap;
+        overflow: hidden; text-overflow: ellipsis;
+    }
+    .chunk-card-body {
+        font-size: 12px; color: #757575; line-height: 1.5;
+        overflow: hidden; display: -webkit-box;
+        -webkit-line-clamp: 5; -webkit-box-orient: vertical;
+    }
+
+    /* ── Chunk reader modal ─────────────────────────────────────────── */
+    .chunk-reader-meta {
+        font-size: 12px; color: #5c6bc0; font-weight: 600;
+        margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #c5cae9;
+    }
+    .chunk-reader-body {
+        font-size: 14px; color: #1a1b2e; line-height: 1.8;
+        white-space: pre-wrap; word-break: break-word;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -218,6 +211,23 @@ def get_collection_count():
     try:
         col = chroma_client.get_or_create_collection(COLLECTION_NAME)
         return col.count()
+    except Exception:
+        return 0
+
+
+def get_document_count():
+    try:
+        col = chroma_client.get_or_create_collection(COLLECTION_NAME)
+        total = col.count()
+        if total == 0:
+            return 0
+        seen, offset, batch = set(), 0, 500
+        while offset < total:
+            result = col.get(limit=batch, offset=offset, include=["metadatas"])
+            for meta in result["metadatas"]:
+                seen.add(meta.get("filename", ""))
+            offset += batch
+        return len(seen)
     except Exception:
         return 0
 
@@ -268,8 +278,7 @@ if "page" not in st.session_state:
     st.session_state["page"] = "home"
 if "mode" not in st.session_state:
     st.session_state["mode"] = None
-if "last_ingested" not in st.session_state:
-    st.session_state["last_ingested"] = "Never"
+
 if "failed_upload_excel" not in st.session_state:
     st.session_state["failed_upload_excel"] = None
 if "failed_bulk_excel" not in st.session_state:
@@ -310,6 +319,16 @@ if "pdf_viewer_filename" not in st.session_state:
     st.session_state["pdf_viewer_filename"] = ""
 if "pending_query" not in st.session_state:
     st.session_state["pending_query"] = None
+if "chunk_viewer_open" not in st.session_state:
+    st.session_state["chunk_viewer_open"] = False
+if "chunk_viewer_data" not in st.session_state:
+    st.session_state["chunk_viewer_data"] = None
+if "pending_delete_file" not in st.session_state:
+    st.session_state["pending_delete_file"] = None
+if "awaiting_file_delete_confirm" not in st.session_state:
+    st.session_state["awaiting_file_delete_confirm"] = False
+if "delete_result" not in st.session_state:
+    st.session_state["delete_result"] = None
 
 
 # ── Task lock ─────────────────────────────────────────────────────────────────
@@ -347,10 +366,11 @@ with st.sidebar:
 
     # Stats
     st.markdown('<div class="section-label">Knowledge Base</div>', unsafe_allow_html=True)
+    doc_count = get_document_count()
     st.markdown(f"""
-    <div style="font-size:13px; color:#8b8fa8; line-height:2;">
-        <div>Chunks indexed: <strong style="color:#e8eaf0">{chunk_count:,}</strong></div>
-        <div>Last ingested: <strong style="color:#e8eaf0">{st.session_state['last_ingested']}</strong></div>
+    <div style="font-size:13px; color:rgba(255,255,255,0.75); line-height:2;">
+        <div>Documents ingested: <strong style="color:#ffffff">{doc_count:,}</strong></div>
+        <div>Chunks indexed: <strong style="color:#ffffff">{chunk_count:,}</strong></div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -389,6 +409,110 @@ with st.sidebar:
                      type="primary" if _cur == "docs" else "secondary"):
             st.session_state["page"] = "docs"
             st.rerun()
+
+    if _mode in ("query", "ingest"):
+        if st.button("🧩  Chunks", use_container_width=True,
+                     disabled=task_running or _loading,
+                     type="primary" if _cur == "chunks" else "secondary"):
+            st.session_state["page"] = "chunks"
+            st.rerun()
+
+    if _mode in ("query", "ingest"):
+        if st.button("🗑️  Delete", use_container_width=True,
+                     disabled=task_running or _loading,
+                     type="primary" if _cur == "delete" else "secondary"):
+            st.session_state["page"] = "delete"
+            st.rerun()
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def get_all_chunks(limit: int = 2000) -> list[dict]:
+    """Return up to `limit` chunks as list of {id, text, filename, page, headings}."""
+    try:
+        col = chroma_client.get_or_create_collection(COLLECTION_NAME)
+        total = col.count()
+        if total == 0:
+            return []
+        result = col.get(limit=min(limit, total), include=["documents", "metadatas"])
+        out = []
+        for cid, text, meta in zip(result["ids"], result["documents"], result["metadatas"]):
+            out.append({
+                "id":       cid,
+                "text":     text or "",
+                "filename": meta.get("filename", "unknown"),
+                "page":     meta.get("page", "?"),
+                "headings": meta.get("headings", ""),
+            })
+        return out
+    except Exception:
+        return []
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def get_file_chunk_counts() -> dict:
+    """Return {filename: {"count": int, "folder": str}} for every indexed file."""
+    try:
+        col = chroma_client.get_or_create_collection(COLLECTION_NAME)
+        total = col.count()
+        if total == 0:
+            return {}
+        counts: dict = {}
+        offset, batch = 0, 500
+        while offset < total:
+            result = col.get(limit=batch, offset=offset, include=["metadatas"])
+            for meta in result["metadatas"]:
+                fname  = meta.get("filename", "unknown")
+                folder = meta.get("folder", "")
+                entry  = counts.setdefault(fname, {"count": 0, "folder": folder})
+                entry["count"] += 1
+            offset += batch
+        return counts
+    except Exception:
+        return {}
+
+
+def delete_file_chunks(filename: str) -> int:
+    """Delete all indexed chunks for *filename*. Returns number of chunks removed."""
+    try:
+        col     = chroma_client.get_or_create_collection(COLLECTION_NAME)
+        results = col.get(where={"filename": filename}, include=[])
+        ids     = results.get("ids", [])
+        if ids:
+            col.delete(ids=ids)
+        return len(ids)
+    except Exception as e:
+        logger.exception(f"DELETE_FILE_CHUNKS_FAIL | file={filename!r} | error={e}")
+        raise
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CHUNK READER MODAL
+# ══════════════════════════════════════════════════════════════════════════════
+@st.dialog("🧩 Chunk Reader", width="large")
+def _chunk_reader_modal():
+    st.session_state["chunk_viewer_open"] = False
+    chunk = st.session_state["chunk_viewer_data"]
+    if not chunk:
+        st.warning("No chunk selected.")
+        return
+
+    fname    = chunk["filename"]
+    page     = chunk["page"]
+    headings = chunk["headings"]
+    text     = chunk["text"]
+    chars    = len(text)
+
+    meta_parts = [f"📄 {fname}", f"page {page}", f"{chars:,} chars (~{chars // 4} tokens)"]
+    if headings:
+        meta_parts.append(f"§ {headings}")
+    st.markdown(
+        f'<div class="chunk-reader-meta">{" · ".join(meta_parts)}</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div class="chunk-reader-body">{html.escape(text)}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -562,7 +686,7 @@ elif st.session_state["page"] == "chat":
             else:
                 elapsed_html = ""
                 if msg.get("elapsed"):
-                    elapsed_html = f'<div style="font-size:11px;color:#5a5f7a;margin-top:8px;">⏱ {msg["elapsed"]}s</div>'
+                    elapsed_html = f'<div style="font-size:11px;color:#9e9ea8;margin-top:8px;">⏱ {msg["elapsed"]}s</div>'
 
                 safe_content = html.escape(msg["content"]).replace("\n", "<br>")
                 st.markdown(
@@ -736,7 +860,7 @@ elif st.session_state["page"] == "upload":
                     ))
                     results.append({"name": fname, "status": "empty"})
                 else:
-                    st.session_state["last_ingested"] = datetime.now().strftime("%d %b %Y, %H:%M")
+
                     results.append({"name": fname, "status": "success",
                                     "added": added, "replaced": replaced})
                     total_chunks += added
@@ -857,7 +981,7 @@ elif st.session_state["page"] == "upload":
     st.markdown('<div class="section-label">Bulk Ingest from Volume</div>',
                 unsafe_allow_html=True)
     st.markdown(
-        "<small style='color:#5a5f7a'>Ingest all PDFs already present in the mounted "
+        "<small style='color:#757575'>Ingest all PDFs already present in the mounted "
         "<code>/app/pdfs</code> folder.</small>",
         unsafe_allow_html=True
     )
@@ -898,7 +1022,7 @@ elif st.session_state["page"] == "upload":
 
     all_pdfs_ingest = get_all_pdfs()
     if not all_pdfs_ingest:
-        st.markdown("<small style='color:#5a5f7a'>No PDFs found on disk yet.</small>",
+        st.markdown("<small style='color:#757575'>No PDFs found on disk yet.</small>",
                     unsafe_allow_html=True)
     else:
         doc_search = st.text_input("🔍  Filter documents...", placeholder="Type to filter...",
@@ -936,24 +1060,212 @@ elif st.session_state["page"] == "upload":
                             st.toast(f"File not found: {pdf.name}", icon="⚠️")
                         st.rerun()
 
+    st.markdown(
+        "<small style='color:#757575;'>To delete chunks for a specific document or clear "
+        "the entire knowledge base, use the <strong>🗑️ Delete</strong> page in the sidebar.</small>",
+        unsafe_allow_html=True,
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: CHUNKS
+# ══════════════════════════════════════════════════════════════════════════════
+elif st.session_state["page"] == "chunks":
+
+    if st.session_state["chunk_viewer_open"] and st.session_state["chunk_viewer_data"]:
+        _chunk_reader_modal()
+
+    st.markdown("### Chunks")
+
+    all_chunks = get_all_chunks()
+
+    if not all_chunks:
+        st.info("No chunks in the knowledge base yet. Ingest some documents first.")
+        if st.button("🔄 Refresh", key="chunks_refresh_empty"):
+            get_all_chunks.clear()
+            st.rerun()
+    else:
+        # Controls row
+        col_search, col_file, col_count, col_refresh = st.columns([3, 2, 1, 1])
+        with col_search:
+            search = st.text_input("🔍  Search chunks...", placeholder="Filter by text or filename...",
+                                   key="chunk_search", label_visibility="collapsed")
+        with col_file:
+            filenames = sorted({c["filename"] for c in all_chunks})
+            file_filter = st.selectbox("File", ["All files"] + filenames,
+                                       key="chunk_file_filter", label_visibility="collapsed")
+        with col_count:
+            st.markdown(
+                f"<div style='font-size:12px;color:#757575;padding-top:8px;text-align:right;'>"
+                f"{len(all_chunks):,} chunks</div>",
+                unsafe_allow_html=True,
+            )
+        with col_refresh:
+            if st.button("🔄 Refresh", key="chunks_refresh", use_container_width=True,
+                         help="Re-fetch chunks from ChromaDB"):
+                get_all_chunks.clear()
+                st.rerun()
+
+        # Filter
+        filtered_chunks = all_chunks
+        if file_filter != "All files":
+            filtered_chunks = [c for c in filtered_chunks if c["filename"] == file_filter]
+        if search:
+            q = search.lower()
+            filtered_chunks = [
+                c for c in filtered_chunks
+                if q in c["text"].lower() or q in c["filename"].lower()
+            ]
+
+        if not filtered_chunks:
+            st.info("No chunks match your filter.")
+        else:
+            st.caption(f"Showing {len(filtered_chunks):,} chunk{'s' if len(filtered_chunks) != 1 else ''}")
+
+            COLS = 4
+            for row_start in range(0, len(filtered_chunks), COLS):
+                row_chunks = filtered_chunks[row_start:row_start + COLS]
+                cols = st.columns(COLS)
+                for col_idx, chunk in enumerate(row_chunks):
+                    with cols[col_idx]:
+                        short_fname = (chunk["filename"][:28] + "…") if len(chunk["filename"]) > 28 else chunk["filename"]
+                        preview = chunk["text"][:200].replace("\n", " ")
+                        st.markdown(
+                            f'<div class="chunk-card">'
+                            f'<div class="chunk-card-meta">📄 {html.escape(short_fname)} · p.{chunk["page"]}</div>'
+                            f'<div class="chunk-card-body">{html.escape(preview)}</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                        if st.button("Open", key=f"chunk_{chunk['id']}", use_container_width=True):
+                            st.session_state["chunk_viewer_open"] = True
+                            st.session_state["chunk_viewer_data"] = chunk
+                            st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: DELETE
+# ══════════════════════════════════════════════════════════════════════════════
+elif st.session_state["page"] == "delete":
+
+    st.markdown("### Delete Chunks")
+
+    # ── Single-file deletion ──────────────────────────────────────────────────
+    st.markdown('<div class="section-label">Delete by Document</div>', unsafe_allow_html=True)
+    st.markdown(
+        "<small style='color:#757575'>Select a document to permanently remove all its "
+        "indexed chunks from the knowledge base. The PDF file on disk is not affected.</small>",
+        unsafe_allow_html=True,
+    )
+
+    file_counts = get_file_chunk_counts()
+
+    if not file_counts:
+        st.info("No indexed documents found.")
+    else:
+        del_search = st.text_input(
+            "🔍  Search documents...", placeholder="Type to filter by filename...",
+            key="delete_search",
+        )
+
+        # Group by folder, mirroring the Documents page layout
+        by_folder: dict[str, list[str]] = {}
+        for fname, info in file_counts.items():
+            by_folder.setdefault(info["folder"] or "Unknown", []).append(fname)
+
+        any_shown = False
+        for folder in sorted(by_folder):
+            fnames = sorted(by_folder[folder])
+            if del_search:
+                fnames = [f for f in fnames if del_search.lower() in f.lower()]
+            if not fnames:
+                continue
+            any_shown = True
+            st.markdown(
+                f'<div class="folder-header">📂 {folder} ({len(fnames)})</div>',
+                unsafe_allow_html=True,
+            )
+            for fname in fnames:
+                count = file_counts[fname]["count"]
+                col1, col2 = st.columns([5, 1])
+                with col1:
+                    st.markdown(
+                        f'<div class="doc-card">'
+                        f'<div class="doc-name">📄 {html.escape(fname)}</div>'
+                        f'<div class="doc-meta">{count:,} chunk{"s" if count != 1 else ""} indexed</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                with col2:
+                    if st.button("Delete", key=f"del_{fname}", use_container_width=True,
+                                 disabled=st.session_state["awaiting_file_delete_confirm"]):
+                        st.session_state["pending_delete_file"]      = fname
+                        st.session_state["awaiting_file_delete_confirm"] = True
+                        st.session_state["delete_result"]            = None
+                        st.rerun()
+
+        if not any_shown:
+            st.info("No documents match your filter.")
+
+    # ── Confirmation banner ───────────────────────────────────────────────────
+    if st.session_state["awaiting_file_delete_confirm"]:
+        fname  = st.session_state["pending_delete_file"]
+        count  = file_counts.get(fname, {}).get("count", "?")
+        st.warning(
+            f"Delete all **{count:,} chunk{'s' if count != 1 else ''}** "
+            f"for **{fname}**? This cannot be undone."
+        )
+        col_yes, col_no, _ = st.columns([1, 1, 4])
+        with col_yes:
+            if st.button("Yes, delete", type="primary", use_container_width=True):
+                try:
+                    removed = delete_file_chunks(fname)
+                    get_file_chunk_counts.clear()
+                    get_all_chunks.clear()
+                    logger.warning(f"FILE_CHUNKS_DELETED | file={fname!r} | chunks={removed}")
+                    st.session_state["delete_result"] = ("success", fname, removed)
+                except Exception as e:
+                    st.session_state["delete_result"] = ("error", fname, str(e))
+                st.session_state["awaiting_file_delete_confirm"] = False
+                st.session_state["pending_delete_file"]          = None
+                st.rerun()
+        with col_no:
+            if st.button("Cancel", use_container_width=True):
+                st.session_state["awaiting_file_delete_confirm"] = False
+                st.session_state["pending_delete_file"]          = None
+                st.rerun()
+
+    # Show result from last deletion
+    if st.session_state["delete_result"]:
+        kind, fname, detail = st.session_state["delete_result"]
+        if kind == "success":
+            st.success(f"✓ Deleted {detail:,} chunk{'s' if detail != 1 else ''} for **{fname}**.")
+        else:
+            st.error(f"✗ Failed to delete chunks for **{fname}**: {detail}")
+
+    # ── Full DB clear ─────────────────────────────────────────────────────────
     st.markdown("---")
     st.markdown('<div class="section-label">Danger Zone</div>', unsafe_allow_html=True)
     st.markdown(
-        "<small style='color:#5a5f7a'>Permanently deletes all indexed chunks from the "
-        "knowledge base. PDFs on disk are not affected.</small>",
-        unsafe_allow_html=True
+        "<small style='color:#757575'>Permanently deletes <strong>all</strong> indexed chunks "
+        "from the knowledge base. PDFs on disk are not affected.</small>",
+        unsafe_allow_html=True,
     )
-
-    confirm = st.checkbox("I understand this will erase all indexed data")
-    if st.button("🗑️ Clear Knowledge Base", type="secondary", disabled=not confirm):
+    confirm_all = st.checkbox("I understand this will erase all indexed data")
+    if st.button("🗑️ Clear Entire Knowledge Base", type="secondary", disabled=not confirm_all):
         try:
-            col = chroma_client.get_or_create_collection(COLLECTION_NAME)
-            total_before = col.count()
+            col_db = chroma_client.get_or_create_collection(COLLECTION_NAME)
+            total_before = col_db.count()
             chroma_client.delete_collection(COLLECTION_NAME)
             chroma_client.create_collection(COLLECTION_NAME)
+            from pipeline import reset_vectorstore
+            reset_vectorstore()
+            get_file_chunk_counts.clear()
+            get_all_chunks.clear()
             logger.warning(f"DB_CLEARED | chunks_removed={total_before}")
+
+            st.session_state["delete_result"] = None
             st.success(f"Knowledge base cleared — {total_before:,} chunks removed.")
-            st.session_state["last_ingested"] = "Never"
             st.rerun()
         except Exception as e:
             logger.error(f"DB_CLEAR_ERROR | error={e}")
