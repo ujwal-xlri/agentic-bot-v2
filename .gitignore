@@ -57,3 +57,6 @@ chroma_data/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Claude previous state information
+claude_info.md
