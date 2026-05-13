@@ -6,7 +6,8 @@ import streamlit as st
 from datetime import datetime
 import defaults
 
-COLLECTION_NAME = os.getenv("COLLECTION_NAME", defaults.COLLECTION_NAME)
+COLLECTION_NAME   = os.getenv("COLLECTION_NAME", defaults.COLLECTION_NAME)
+ENABLE_EVALUATION = os.getenv("ENABLE_EVALUATION", "false").lower() == "true"
 from log_config import setup_logger
 from modules.query import query_stream
 from modules.ingestion import ingest, ingest_folder
@@ -329,6 +330,8 @@ if "awaiting_file_delete_confirm" not in st.session_state:
     st.session_state["awaiting_file_delete_confirm"] = False
 if "delete_result" not in st.session_state:
     st.session_state["delete_result"] = None
+if "eval_results" not in st.session_state:
+    st.session_state["eval_results"] = None
 
 
 # ── Task lock ─────────────────────────────────────────────────────────────────
@@ -422,6 +425,13 @@ with st.sidebar:
                      disabled=task_running or _loading,
                      type="primary" if _cur == "delete" else "secondary"):
             st.session_state["page"] = "delete"
+            st.rerun()
+
+    if ENABLE_EVALUATION and _mode in ("query", "ingest"):
+        if st.button("🔬  Evaluate", use_container_width=True,
+                     disabled=task_running or _loading,
+                     type="primary" if _cur == "evaluate" else "secondary"):
+            st.session_state["page"] = "evaluate"
             st.rerun()
 
 
@@ -1270,3 +1280,246 @@ elif st.session_state["page"] == "delete":
         except Exception as e:
             logger.error(f"DB_CLEAR_ERROR | error={e}")
             st.error(f"Failed to clear database: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: EVALUATE  (enabled via defaults.ENABLE_EVALUATION or ENABLE_EVALUATION env var)
+# ══════════════════════════════════════════════════════════════════════════════
+elif ENABLE_EVALUATION and st.session_state["page"] == "evaluate":
+    from modules.evaluation import (
+        extract_source_info, structural_metrics,
+        generate_questions, retrieval_score, composite_score, score_grade,
+        MIN_CHUNK_CHARS as _MIN_CHUNK_CHARS,
+    )
+    from pipeline import get_vectorstore, get_reranker, get_llm
+
+    _RETRIEVAL_K   = int(os.getenv("RETRIEVAL_K",   defaults.RETRIEVAL_K))
+    _RERANKER_TOP_N = int(os.getenv("RERANKER_TOP_N", defaults.RERANKER_TOP_N))
+
+    st.markdown("### 🔬 Chunk Evaluator")
+    st.markdown(
+        "<div style='color:#8b8fa8;font-size:15px;margin-bottom:24px;'>"
+        "Score chunking quality for any indexed document using structural "
+        "heuristics and LLM-based synthetic Q&amp;A.</div>",
+        unsafe_allow_html=True,
+    )
+
+    _file_counts = get_file_chunk_counts()
+    if not _file_counts:
+        st.info("No documents indexed yet. Ingest some PDFs first.")
+        st.stop()
+
+    _col_sel, _col_q, _col_btn = st.columns([3, 2, 1])
+    with _col_sel:
+        _doc_names   = sorted(_file_counts.keys())
+        _selected_doc = st.selectbox("Document", _doc_names)
+    with _col_q:
+        _n_questions = st.slider("Synthetic questions", min_value=3, max_value=10, value=5)
+    with _col_btn:
+        st.markdown("<div style='padding-top:28px;'></div>", unsafe_allow_html=True)
+        _run = st.button("▶ Run", type="primary", use_container_width=True)
+
+    if _run and _selected_doc:
+        # ── 1. Fetch indexed chunks for the selected file ─────────────────
+        with st.spinner("Fetching indexed chunks…"):
+            _col_db = chroma_client.get_or_create_collection(COLLECTION_NAME)
+            _db_result = _col_db.get(
+                where={"filename": _selected_doc},
+                include=["documents", "metadatas"],
+            )
+            _chunks = [
+                {"text": doc or "", **(meta or {})}
+                for doc, meta in zip(_db_result["documents"], _db_result["metadatas"])
+            ]
+
+        # ── 2. Locate source PDF ──────────────────────────────────────────
+        _pdf_path = None
+        for _c in _chunks:
+            _p = _c.get("full_path", "")
+            if _p and pathlib.Path(_p).exists():
+                _pdf_path = _p
+                break
+
+        # ── 3. Extract source text ────────────────────────────────────────
+        if _pdf_path:
+            with st.spinner("Extracting text from source PDF…"):
+                _source_text, _table_count, _heading_count = extract_source_info(_pdf_path)
+        else:
+            st.warning("Original PDF not found on disk — question generation will use chunk text.")
+            _source_text  = " ".join(c["text"] for c in _chunks)
+            _table_count  = 0
+            _heading_count = 0
+
+        # ── 4. Structural metrics ─────────────────────────────────────────
+        with st.spinner("Computing structural metrics…"):
+            _struct = structural_metrics(_chunks, _table_count, _heading_count)
+
+        # ── 5. Generate synthetic questions ───────────────────────────────
+        with st.spinner(f"Generating {_n_questions} synthetic questions via LLM…"):
+            _llm       = get_llm()
+            _questions = generate_questions(_source_text, _n_questions, _llm)
+
+        if not _questions:
+            st.warning("LLM did not return any questions — retrieval score will be 0.")
+            _ret = {"hit_rate": 0.0, "mrr": 0.0, "per_question": []}
+        else:
+            # ── 6. Retrieval evaluation ───────────────────────────────────
+            with st.spinner(f"Evaluating retrieval for {len(_questions)} questions…"):
+                _k     = min(_RETRIEVAL_K, _struct["total_chunks"])
+                _top_n = min(_RERANKER_TOP_N, _k)
+                _ret   = retrieval_score(
+                    _questions,
+                    get_vectorstore(),
+                    get_reranker(),
+                    _selected_doc,
+                    _llm,
+                    k=_k,
+                    top_n=_top_n,
+                )
+
+        _score, _breakdown = composite_score(_struct, _ret)
+
+        st.session_state["eval_results"] = {
+            "doc":       _selected_doc,
+            "struct":    _struct,
+            "ret":       _ret,
+            "score":     _score,
+            "breakdown": _breakdown,
+        }
+
+    # ── Results display ───────────────────────────────────────────────────────
+    _res = st.session_state.get("eval_results")
+    if _res and _res["doc"] == _selected_doc:
+        _struct    = _res["struct"]
+        _ret       = _res["ret"]
+        _score     = _res["score"]
+        _breakdown = _res["breakdown"]
+        _grade, _grade_color = score_grade(_score)
+
+        st.markdown("---")
+
+        # ── Composite score card ──────────────────────────────────────────
+        _sc1, _sc2, _sc3 = st.columns([1, 1, 2])
+
+        with _sc1:
+            st.markdown(f"""
+            <div style="text-align:center; padding:20px; background:#f5f6ff;
+                        border:2px solid {_grade_color}; border-radius:12px;">
+                <div style="font-size:52px; font-weight:700; color:{_grade_color};
+                            line-height:1;">{_score}</div>
+                <div style="font-size:13px; color:#9e9ea8; margin:4px 0;">out of 100</div>
+                <div style="font-size:28px; font-weight:600; color:{_grade_color};">{_grade}</div>
+            </div>""", unsafe_allow_html=True)
+
+        with _sc2:
+            st.markdown(f"""
+            <div style="padding:20px; background:#f5f6ff; border:1px solid #c5cae9;
+                        border-radius:12px; height:100%;">
+                <div style="font-size:12px; color:#9e9ea8; font-weight:600;
+                            letter-spacing:.06em; text-transform:uppercase;
+                            margin-bottom:12px;">Component Scores</div>
+                <div style="font-size:15px; margin-bottom:8px;">
+                    Structural &nbsp;
+                    <strong>{_breakdown['structural_score']}/100</strong>
+                    <span style="color:#9e9ea8; font-size:11px;"> (40%)</span>
+                </div>
+                <div style="font-size:15px;">
+                    Retrieval &nbsp;
+                    <strong>{_breakdown['retrieval_score']}/100</strong>
+                    <span style="color:#9e9ea8; font-size:11px;"> (60%)</span>
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+        with _sc3:
+            _tc_display = (
+                f"{_struct['table_coverage']*100:.0f}%"
+                if _struct.get("table_coverage") is not None
+                else "N/A"
+            )
+            st.markdown(f"""
+            <div style="padding:20px; background:#f5f6ff; border:1px solid #c5cae9;
+                        border-radius:12px; height:100%;">
+                <div style="font-size:12px; color:#9e9ea8; font-weight:600;
+                            letter-spacing:.06em; text-transform:uppercase;
+                            margin-bottom:12px;">Summary — {_res['doc']}</div>
+                <div style="font-size:13px; line-height:2.2; color:#1a1b2e;">
+                    <div>Chunks indexed: <strong>{_struct['total_chunks']:,}</strong></div>
+                    <div>Avg chunk size: <strong>{_struct['avg_chars']:,.0f} chars</strong></div>
+                    <div>Hit rate: <strong>{_ret['hit_rate']*100:.0f}%</strong></div>
+                    <div>MRR: <strong>{_ret['mrr']:.3f}</strong></div>
+                    <div>Table coverage: <strong>{_tc_display}</strong></div>
+                    <div>Heading rate: <strong>{_struct['heading_rate']*100:.0f}%</strong></div>
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+        st.markdown("---")
+
+        # ── Detailed metric tables ────────────────────────────────────────
+        _m1, _m2 = st.columns(2)
+
+        with _m1:
+            st.markdown("**Structural Metrics**")
+            _tc_str = (
+                f"{_struct['table_coverage']*100:.1f}%  "
+                f"({_struct['chunks_with_tables']} chunks / {_struct['source_tables']} source tables)"
+                if _struct.get("table_coverage") is not None
+                else f"N/A — no tables detected in source"
+            )
+            st.markdown(f"""
+| Metric | Value |
+|--------|-------|
+| Total chunks | {_struct['total_chunks']:,} |
+| Avg chunk size | {_struct['avg_chars']:,.0f} chars |
+| Std deviation | {_struct['std_chars']:,.0f} chars |
+| Min / Max | {_struct['min_chars']:,} / {_struct['max_chars']:,} chars |
+| Short chunks (<{_MIN_CHUNK_CHARS} chars) | {_struct['short_chunk_ratio']*100:.1f}% ({_struct['total_chunks'] - round(_struct['total_chunks']*(1-_struct['short_chunk_ratio'])):,} chunks) |
+| Chunks with heading metadata | {_struct['heading_rate']*100:.0f}% ({_struct['chunks_with_headings']:,} / {_struct['total_chunks']:,}) |
+| Table coverage | {_tc_str} |
+""")
+
+        with _m2:
+            st.markdown("**Retrieval Metrics**")
+            st.markdown(f"""
+| Metric | Value |
+|--------|-------|
+| Hit rate | {_ret['hit_rate']*100:.0f}% |
+| MRR | {_ret['mrr']:.3f} |
+| Questions evaluated | {len(_ret['per_question'])} |
+| Answered | {sum(1 for r in _ret['per_question'] if r['hit'])} |
+| Not answered | {sum(1 for r in _ret['per_question'] if not r['hit'])} |
+""")
+
+        # ── Per-question breakdown ────────────────────────────────────────
+        if _ret["per_question"]:
+            st.markdown("---")
+
+            _total_sec = _ret.get("total_seconds", 0)
+            _total_min = int(_total_sec // 60)
+            _total_rem = _total_sec % 60
+            st.markdown(
+                f"**Question-by-question results** "
+                f"<span style='color:#9e9ea8; font-size:13px;'>"
+                f"— total time: {_total_min}m {_total_rem:.1f}s</span>",
+                unsafe_allow_html=True,
+            )
+
+            for _i, _qr in enumerate(_ret["per_question"], 1):
+                _icon  = "✅" if _qr["hit"] else "❌"
+                _err   = _qr.get("error", "")
+                _secs  = _qr.get("elapsed_seconds", 0)
+                _label = (
+                    f"{_icon} Q{_i}: {_qr['question']}  ({_secs}s)"
+                    + (f" — error: {_err}" if _err else "")
+                )
+                with st.expander(_label, expanded=False):
+                    _ans = _qr.get("answer", "")
+                    if _ans:
+                        st.markdown("**LLM answer:**")
+                        st.markdown(_ans)
+                        st.markdown("---")
+                    _ctx = _qr.get("context", "")
+                    if _ctx:
+                        st.markdown("**Retrieved chunks used:**")
+                        st.text(_ctx[:2000] + ("…" if len(_ctx) > 2000 else ""))
+                    else:
+                        st.caption("No chunks retrieved for this question.")
