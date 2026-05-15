@@ -24,6 +24,9 @@ MIN_CHUNK_CHARS = "50"
 RERANKER_MODEL = "BAAI/bge-reranker-base"
 RERANKER_TOP_N = "4"
 
+# Unstructured API (self-hosted sidecar container)
+UNSTRUCTURED_API_URL = "http://unstructured-api:8000"
+
 # Paths
 PDF_DIR = "/app/pdfs"
 LOG_DIR = "/app/logs"

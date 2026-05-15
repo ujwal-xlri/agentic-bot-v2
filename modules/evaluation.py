@@ -25,22 +25,24 @@ MIN_CHUNK_CHARS = int(os.getenv("MIN_CHUNK_CHARS", defaults.MIN_CHUNK_CHARS))
 
 def extract_source_info(pdf_path: str) -> tuple[str, int, int]:
     """
-    Extract (full_text, table_count, heading_count) from a PDF via pdfplumber.
+    Extract (full_text, table_count, heading_count) from a PDF via pymupdf.
     Returns ("", 0, 0) on failure — callers fall back to chunk text.
     """
-    import pdfplumber
+    import fitz  # pymupdf
 
-    full_text = ""
+    full_text   = ""
     table_count = 0
 
     try:
-        with pdfplumber.open(pdf_path) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text() or ""
-                full_text += text + "\n"
-                tables = page.extract_tables() or []
-                # Only count tables with more than a header row
-                table_count += sum(1 for t in tables if t and len(t) > 1)
+        doc = fitz.open(pdf_path)
+        for page in doc:
+            full_text += (page.get_text() or "") + "\n"
+            try:
+                tabs = page.find_tables()
+                table_count += sum(1 for t in tabs.tables if len(t.rows) > 1)
+            except Exception:
+                pass
+        doc.close()
     except Exception:
         return "", 0, 0
 
@@ -49,7 +51,7 @@ def extract_source_info(pdf_path: str) -> tuple[str, int, int]:
 
 
 def _count_source_headings(text: str) -> int:
-    """Heuristic heading detection on plain pdfplumber text."""
+    """Heuristic heading detection on extracted text."""
     count = 0
     for line in text.splitlines():
         line = line.strip()

@@ -208,6 +208,15 @@ def check_ollama():
     except Exception:
         return False
 
+def check_unstructured_api():
+    try:
+        import urllib.request
+        url = os.getenv("UNSTRUCTURED_API_URL", defaults.UNSTRUCTURED_API_URL)
+        urllib.request.urlopen(f"{url}/healthcheck", timeout=2)
+        return True
+    except Exception:
+        return False
+
 def get_collection_count():
     try:
         col = chroma_client.get_or_create_collection(COLLECTION_NAME)
@@ -349,10 +358,11 @@ with st.sidebar:
     # Service status
     st.markdown('<div class="section-label">System Status</div>', unsafe_allow_html=True)
 
-    chroma_ok   = check_chromadb()
-    ollama_ok   = check_ollama()
-    model_name  = os.getenv("OLLAMA_MODEL", defaults.OLLAMA_MODEL)
-    chunk_count = get_collection_count()
+    chroma_ok        = check_chromadb()
+    ollama_ok        = check_ollama()
+    unstructured_ok  = check_unstructured_api()
+    model_name       = os.getenv("OLLAMA_MODEL", defaults.OLLAMA_MODEL)
+    chunk_count      = get_collection_count()
 
     st.markdown(f"""
     <div style="font-size:13px; line-height:2;">
@@ -360,6 +370,8 @@ with st.sidebar:
         ChromaDB {'connected' if chroma_ok else 'offline'}</div>
         <div><span class="status-dot {'status-ok' if ollama_ok else 'status-err'}"></span>
         Ollama {'ready' if ollama_ok else 'offline'}</div>
+        <div><span class="status-dot {'status-ok' if unstructured_ok else 'status-err'}"></span>
+        Unstructured {'ready' if unstructured_ok else 'offline'}</div>
         <div><span class="status-dot status-ok"></span>
         Model: {model_name}</div>
     </div>
@@ -648,13 +660,8 @@ elif st.session_state["page"] == "loading":
             _elapsed = round(time.time() - t0, 1)
             _status.update(label=f"Ready — {_elapsed}s", state="complete")
     else:
-        from modules.ingestion import get_converter, get_chunker
         from pipeline import get_embedder, get_vectorstore
         with st.status("Loading models…", expanded=True) as _status:
-            st.write("Loading document converter…")
-            get_converter()
-            st.write("Loading document chunker…")
-            get_chunker()
             st.write("Loading embedding model…")
             get_embedder()
             st.write("Preparing vector store…")

@@ -1,116 +1,32 @@
 import os
 import re
+import base64
+import zlib
+import json
 import hashlib
 import pathlib
 import time
+import requests
 import chromadb
 import defaults
+
 from log_config import setup_logger
 
 logger = setup_logger("ingestion")
 
-PDF_DIR         = os.getenv("PDF_DIR",            defaults.PDF_DIR)
-CHUNK_SIZE      = int(os.getenv("CHUNK_SIZE",     defaults.CHUNK_SIZE))
-COLLECTION_NAME = os.getenv("COLLECTION_NAME",    defaults.COLLECTION_NAME)
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL",    defaults.EMBEDDING_MODEL)
-MIN_CHUNK_CHARS = int(os.getenv("MIN_CHUNK_CHARS", defaults.MIN_CHUNK_CHARS))
+PDF_DIR              = os.getenv("PDF_DIR",              defaults.PDF_DIR)
+CHUNK_SIZE           = int(os.getenv("CHUNK_SIZE",       defaults.CHUNK_SIZE))
+COLLECTION_NAME      = os.getenv("COLLECTION_NAME",      defaults.COLLECTION_NAME)
+MIN_CHUNK_CHARS      = int(os.getenv("MIN_CHUNK_CHARS",  defaults.MIN_CHUNK_CHARS))
+UNSTRUCTURED_API_URL = os.getenv("UNSTRUCTURED_API_URL", defaults.UNSTRUCTURED_API_URL)
 
 _BARE_NUMBER_RE = re.compile(r"^\d+$")
 
-# ---------------------------------------------------------------------------
-# Module-level singletons — initialised once, reused across all ingest calls
-# ---------------------------------------------------------------------------
-
-def _make_converter():
-    from docling.document_converter import DocumentConverter, PdfFormatOption
-    from docling.datamodel.pipeline_options import PdfPipelineOptions
-    from docling.datamodel.base_models import InputFormat
-
-    logger.debug("SINGLETON_INIT | component=DocumentConverter")
-    try:
-        pipeline_options                    = PdfPipelineOptions()
-        pipeline_options.do_table_structure = True
-        converter = DocumentConverter(
-            format_options={
-                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
-            }
-        )
-        logger.info("SINGLETON_READY | component=DocumentConverter")
-        return converter
-    except Exception:
-        logger.exception("SINGLETON_FAIL | component=DocumentConverter")
-        raise
-
-
-def _make_ocr_converter():
-    from docling.document_converter import DocumentConverter, PdfFormatOption
-    from docling.datamodel.pipeline_options import PdfPipelineOptions
-    from docling.datamodel.base_models import InputFormat
-
-    logger.debug("SINGLETON_INIT | component=OcrConverter")
-    try:
-        pipeline_options                    = PdfPipelineOptions()
-        pipeline_options.do_ocr             = True
-        pipeline_options.do_table_structure = True
-        converter = DocumentConverter(
-            format_options={
-                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
-            }
-        )
-        logger.info("SINGLETON_READY | component=OcrConverter")
-        return converter
-    except Exception:
-        logger.exception("SINGLETON_FAIL | component=OcrConverter")
-        raise
-
-
-def _make_chunker():
-    from docling.chunking import HybridChunker
-    logger.debug(f"SINGLETON_INIT | component=HybridChunker | model={EMBEDDING_MODEL!r} | max_tokens={CHUNK_SIZE}")
-    try:
-        chunker = HybridChunker(tokenizer=EMBEDDING_MODEL, max_tokens=CHUNK_SIZE)
-        logger.info(f"SINGLETON_READY | component=HybridChunker | model={EMBEDDING_MODEL!r}")
-        return chunker
-    except Exception:
-        logger.exception(f"SINGLETON_FAIL | component=HybridChunker | model={EMBEDDING_MODEL!r}")
-        raise
-
-_converter     = None
-_ocr_converter = None
-_chunker       = None
-
-
-def _get_converter():
-    global _converter
-    if _converter is None:
-        _converter = _make_converter()
-    return _converter
-
-
-def _get_ocr_converter():
-    global _ocr_converter
-    if _ocr_converter is None:
-        _ocr_converter = _make_ocr_converter()
-    return _ocr_converter
-
-
-def _get_chunker():
-    global _chunker
-    if _chunker is None:
-        _chunker = _make_chunker()
-    return _chunker
-
-
-def get_converter():
-    return _get_converter()
-
-
-def get_chunker():
-    return _get_chunker()
-
 
 def ingest_models_ready() -> bool:
-    return _converter is not None and _chunker is not None
+    """True when the embedder + vectorstore singletons are already warm."""
+    from pipeline import _embedder, _vectorstore
+    return _embedder is not None and _vectorstore is not None
 
 
 # ---------------------------------------------------------------------------
@@ -156,16 +72,11 @@ def _delete_existing_chunks(filename: str) -> int:
 
 
 def _chunk_id(filename: str, index: int) -> str:
-    """Deterministic chunk ID — enables true upserts instead of delete-then-insert."""
     return hashlib.sha256(f"{filename}::{index}".encode()).hexdigest()
 
 
 def _clean_chunk(text: str, filename: str) -> str:
-    """
-    Strip header/footer artifacts from a chunk.
-    Removes lines that are bare page numbers or match the document's filename stem.
-    Both patterns are derived from the file being ingested — nothing is hardcoded.
-    """
+    """Strip bare page numbers and filename-stem lines from a chunk."""
     stem      = pathlib.Path(filename).stem
     stem_norm = re.sub(r"[\s_\-]+", " ", stem).strip().lower()
 
@@ -183,53 +94,131 @@ def _clean_chunk(text: str, filename: str) -> str:
     return "\n".join(cleaned).strip()
 
 
-def _pdfplumber_chunks(pdf_path: str, filename: str, folder: str) -> tuple[list, list, list]:
-    """
-    Extract text page-by-page via pdfplumber and split into chunks.
-    Used as a final fallback when both Docling passes (native + OCR) fail.
-    Tables are linearised row-by-row, which is imperfect but searchable.
-    """
-    import pdfplumber
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
+# ---------------------------------------------------------------------------
+# Unstructured API-based parsing
+# ---------------------------------------------------------------------------
 
-    splitter  = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE * 4,  # 4 chars ≈ 1 token
-        chunk_overlap=100,
-    )
-    texts, metadatas, ids = [], [], []
-    chunk_idx = 0
+def _unstructured_chunks(
+    pdf_path: str,
+    filename: str,
+    folder: str,
+    strategy: str = "hi_res",
+) -> tuple[list, list, list]:
+    """POST the PDF to the self-hosted Unstructured API and return (texts, metadatas, ids)."""
+    url = f"{UNSTRUCTURED_API_URL}/general/v0/general"
+    t0  = time.time()
 
     try:
-        with pdfplumber.open(pdf_path) as pdf:
-            for page in pdf.pages:
-                page_text = page.extract_text() or ""
-                if not page_text.strip():
-                    continue
-                for split in splitter.split_text(page_text):
-                    text = _clean_chunk(split, filename)
-                    if len(text) < MIN_CHUNK_CHARS:
-                        continue
-                    texts.append(text)
-                    metadatas.append({
-                        "filename":  filename,
-                        "full_path": pdf_path,
-                        "folder":    folder,
-                        "headings":  "",
-                        "page":      page.page_number,
-                        "chunk_idx": chunk_idx,
-                    })
-                    ids.append(_chunk_id(filename, chunk_idx))
-                    chunk_idx += 1
+        with open(pdf_path, "rb") as fh:
+            resp = requests.post(
+                url,
+                files={"files": (filename, fh, "application/pdf")},
+                data={
+                    "strategy":                   strategy,
+                    "pdf_infer_table_structure":  "true",
+                    "chunking_strategy":          "by_title",
+                    "max_characters":             str(CHUNK_SIZE * 4),
+                    "new_after_n_chars":          str(CHUNK_SIZE * 3),
+                    "combine_text_under_n_chars": str(MIN_CHUNK_CHARS * 4),
+                    "overlap":                    "200",
+                    "overlap_all":                "false",
+                },
+                timeout=600,
+            )
     except Exception:
-        logger.exception(f"PDFPLUMBER_FAIL | file={filename!r}")
+        logger.exception(
+            f"UNSTRUCTURED_API_UNREACHABLE | file={filename!r} | strategy={strategy!r}"
+        )
+        return [], [], []
 
-    logger.info(f"PDFPLUMBER_CHUNKS | file={filename!r} | chunks={len(texts)}")
+    elapsed = round(time.time() - t0, 3)
+
+    if resp.status_code != 200:
+        logger.error(
+            f"UNSTRUCTURED_API_ERROR | file={filename!r} | strategy={strategy!r} "
+            f"| status={resp.status_code} | body={resp.text[:300]!r}"
+        )
+        return [], [], []
+
+    try:
+        elements = resp.json()
+    except Exception:
+        logger.exception(f"UNSTRUCTURED_API_JSON_FAIL | file={filename!r}")
+        return [], [], []
+
+    logger.info(
+        f"UNSTRUCTURED_API_OK | file={filename!r} | strategy={strategy!r} "
+        f"| elements={len(elements)} | elapsed={elapsed}s"
+    )
+
+    texts: list     = []
+    metadatas: list = []
+    ids: list       = []
+    chunk_idx       = 0
+    skipped         = 0
+
+    for elem in elements:
+        if elem.get("type") not in ("CompositeElement", "Table", "TableChunk"):
+            continue
+
+        elem_type = elem.get("type", "")
+        meta      = elem.get("metadata", {})
+
+        # For table elements prefer the HTML representation — it preserves
+        # row/column structure so the LLM can answer structured queries.
+        # Plain text concatenates all cell values into one unstructured blob.
+        if elem_type in ("Table", "TableChunk") and meta.get("text_as_html"):
+            raw_text = meta["text_as_html"]
+        else:
+            raw_text = elem.get("text", "")
+
+        text = _clean_chunk(raw_text, filename)
+        if len(text) < MIN_CHUNK_CHARS:
+            skipped += 1
+            continue
+        page_no = meta.get("page_number")
+
+        # Decode orig_elements (base64+zlib JSON) to extract Title headings
+        headings  = []
+        orig_b64  = meta.get("orig_elements", "")
+        if orig_b64:
+            try:
+                orig_json = zlib.decompress(base64.b64decode(orig_b64)).decode()
+                headings  = [
+                    e["text"] for e in json.loads(orig_json)
+                    if e.get("type") == "Title"
+                ]
+            except Exception as exc:
+                logger.warning(
+                    f"ORIG_ELEMENTS_DECODE_FAIL | file={filename!r} "
+                    f"| chunk_idx={chunk_idx} | error={exc}"
+                )
+
+        logger.debug(
+            f"CHUNK_BUILD | file={filename!r} | chunk_idx={chunk_idx} "
+            f"| page={page_no} | headings={headings!r} | chars={len(text)}"
+        )
+
+        texts.append(text)
+        metadatas.append({
+            "filename":  filename,
+            "full_path": pdf_path,
+            "folder":    folder,
+            "headings":  " > ".join(headings) if headings else "",
+            "page":      page_no,
+            "chunk_idx": chunk_idx,
+        })
+        ids.append(_chunk_id(filename, chunk_idx))
+        chunk_idx += 1
+
+    if skipped:
+        logger.warning(f"CHUNK_SKIPPED_SHORT | file={filename!r} | skipped={skipped}")
+
+    logger.info(
+        f"UNSTRUCTURED_CHUNKS | file={filename!r} | strategy={strategy!r} "
+        f"| chunks={len(texts)} | skipped={skipped}"
+    )
     return texts, metadatas, ids
-
-
-def _is_image_only(md: str) -> bool:
-    lines = [l.strip() for l in md.splitlines() if l.strip()]
-    return not lines or all(l == "<!-- image -->" for l in lines)
 
 
 # ---------------------------------------------------------------------------
@@ -238,10 +227,7 @@ def _is_image_only(md: str) -> bool:
 
 def ingest(pdf_path: str) -> tuple[int, int]:
     """
-    Ingest a PDF in one pass using Docling + HybridChunker.
-
-    Tries native conversion first. If the result is empty or image-only,
-    automatically retries with OCR (lazy-loading the OCR converter on first use).
+    Ingest a PDF via the Unstructured API sidecar (hi_res → fast fallback).
     Removes any previously indexed chunks for this file before adding new ones.
     Returns (chunks_added, chunks_replaced).
     """
@@ -257,121 +243,28 @@ def ingest(pdf_path: str) -> tuple[int, int]:
         logger.error(f"INGEST_FILE_NOT_FOUND | file={filename!r} | path={pdf_path!r}")
         return 0, 0
 
-    # --- Dedup ---
+    # --- Parse first, dedup only if we have chunks to replace with ---
+    # Stage 1: hi_res
+    texts, metadatas, ids = _unstructured_chunks(pdf_path, filename, folder, strategy="hi_res")
+
+    # Stage 2: fast fallback
+    if not texts:
+        logger.info(f"INGEST_FALLBACK_FAST | file={filename!r} | reason=hi_res_empty_or_failed")
+        texts, metadatas, ids = _unstructured_chunks(pdf_path, filename, folder, strategy="fast")
+
+    if not texts:
+        logger.error(f"INGEST_UNREADABLE | file={filename!r} | reason=all_strategies_failed")
+        return 0, 0
+
+    # --- Dedup (safe to delete now that we have replacement chunks) ---
     try:
         replaced = _delete_existing_chunks(filename)
     except Exception as e:
-        logger.error(f"INGEST_DEDUP_FAIL | file={filename!r} | reason={e} | action=aborting_ingest")
+        logger.error(f"INGEST_DEDUP_FAIL | file={filename!r} | reason={e}")
         return 0, 0
 
     if replaced:
         logger.info(f"INGEST_DEDUP | file={filename!r} | removed_chunks={replaced}")
-    else:
-        logger.debug(f"INGEST_DEDUP | file={filename!r} | no_existing_chunks")
-
-    # --- Parse with Docling ---
-    logger.debug(f"DOCLING_CONVERT_START | file={filename!r}")
-    try:
-        t0     = time.time()
-        result = _get_converter().convert(pdf_path)
-        md     = result.document.export_to_markdown().strip()
-        logger.info(f"DOCLING_CONVERT_OK | file={filename!r} | elapsed={round(time.time()-t0,3)}s | chars={len(md)}")
-    except Exception:
-        logger.exception(f"DOCLING_CONVERT_FAIL | file={filename!r}")
-        return 0, replaced
-
-    if _is_image_only(md):
-        logger.info(f"INGEST_OCR_RETRY | file={filename!r} | reason=image_only_native_pass")
-        try:
-            t0     = time.time()
-            result = _get_ocr_converter().convert(pdf_path)
-            md     = result.document.export_to_markdown().strip()
-            logger.info(f"DOCLING_OCR_OK | file={filename!r} | elapsed={round(time.time()-t0,3)}s | chars={len(md)}")
-        except Exception:
-            logger.exception(f"DOCLING_OCR_FAIL | file={filename!r}")
-            return 0, replaced
-
-        if _is_image_only(md):
-            logger.info(f"INGEST_PDFPLUMBER_FALLBACK | file={filename!r} | reason=image_only_after_ocr")
-            texts, metadatas, ids = _pdfplumber_chunks(pdf_path, filename, folder)
-            if not texts:
-                logger.error(f"INGEST_UNREADABLE | file={filename!r} | reason=all_methods_failed")
-                return 0, replaced
-            logger.debug(f"VECTORSTORE_WRITE_START | file={filename!r} | chunks={len(texts)}")
-            try:
-                t0          = time.time()
-                vectorstore = get_vectorstore()
-                vectorstore.add_texts(texts, metadatas=metadatas, ids=ids)
-                logger.info(f"VECTORSTORE_WRITE_OK | file={filename!r} | elapsed={round(time.time()-t0,3)}s | chunks={len(texts)}")
-            except Exception:
-                logger.exception(f"VECTORSTORE_WRITE_FAIL | file={filename!r} | chunks={len(texts)}")
-                return 0, replaced
-            logger.info(f"INGEST_DONE | file={filename!r} | chunks_added={len(texts)} | chunks_replaced={replaced} | method=pdfplumber")
-            return len(texts), replaced
-
-    # --- Chunk ---
-    logger.debug(f"DOCLING_CHUNK_START | file={filename!r}")
-    try:
-        t0     = time.time()
-        chunks = list(_get_chunker().chunk(result.document))
-        logger.info(f"DOCLING_CHUNK_OK | file={filename!r} | elapsed={round(time.time()-t0,3)}s | raw_chunks={len(chunks)}")
-    except Exception:
-        logger.exception(f"DOCLING_CHUNK_FAIL | file={filename!r}")
-        return 0, replaced
-
-    if not chunks:
-        logger.warning(
-            f"INGEST_EMPTY | file={filename!r} | stage=post_chunk "
-            f"| no content extracted from document"
-        )
-        return 0, replaced
-
-    # --- Build per-chunk texts and metadata ---
-    texts     = []
-    metadatas = []
-    ids       = []
-    skipped   = 0
-
-    for i, chunk in enumerate(chunks):
-        text = _clean_chunk(chunk.text, filename)
-        if len(text) < MIN_CHUNK_CHARS:
-            logger.debug(f"CHUNK_SKIP_SHORT | file={filename!r} | chunk_idx={i} | chars={len(text)}")
-            skipped += 1
-            continue
-
-        headings  = getattr(chunk.meta, "headings", None) or []
-        page_no   = None
-        doc_items = getattr(chunk.meta, "doc_items", None) or []
-        if doc_items:
-            prov = getattr(doc_items[0], "prov", None) or []
-            if prov:
-                page_no = getattr(prov[0], "page_no", None)
-
-        logger.debug(
-            f"CHUNK_BUILD | file={filename!r} | chunk_idx={i} | page={page_no} "
-            f"| headings={headings!r} | chars={len(text)}"
-        )
-
-        texts.append(text)
-        metadatas.append({
-            "filename":  filename,
-            "full_path": pdf_path,
-            "folder":    folder,
-            "headings":  " > ".join(headings) if headings else "",
-            "page":      page_no,
-            "chunk_idx": i,
-        })
-        ids.append(_chunk_id(filename, i))
-
-    if skipped:
-        logger.warning(f"CHUNK_SKIPPED_EMPTY | file={filename!r} | skipped={skipped} | kept={len(texts)}")
-
-    if not texts:
-        logger.error(
-            f"INGEST_EMPTY_AFTER_FILTER | file={filename!r} | raw_chunks={len(chunks)} "
-            f"| all chunks were empty after stripping — possible Docling parse issue"
-        )
-        return 0, replaced
 
     # --- Write to vector store ---
     logger.debug(f"VECTORSTORE_WRITE_START | file={filename!r} | chunks={len(texts)}")
@@ -379,14 +272,17 @@ def ingest(pdf_path: str) -> tuple[int, int]:
         t0          = time.time()
         vectorstore = get_vectorstore()
         vectorstore.add_texts(texts, metadatas=metadatas, ids=ids)
-        logger.info(f"VECTORSTORE_WRITE_OK | file={filename!r} | elapsed={round(time.time()-t0,3)}s | chunks={len(texts)}")
+        logger.info(
+            f"VECTORSTORE_WRITE_OK | file={filename!r} "
+            f"| elapsed={round(time.time()-t0, 3)}s | chunks={len(texts)}"
+        )
     except Exception:
         logger.exception(f"VECTORSTORE_WRITE_FAIL | file={filename!r} | chunks={len(texts)}")
         return 0, replaced
 
     logger.info(
         f"INGEST_DONE | file={filename!r} | chunks_added={len(texts)} "
-        f"| chunks_replaced={replaced} | skipped_empty={skipped}"
+        f"| chunks_replaced={replaced}"
     )
     return len(texts), replaced
 

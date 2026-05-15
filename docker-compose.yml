@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        BUILDKIT_INLINE_CACHE: "1"
     container_name: agentic-bot-v2
     ports:
       - "8501:8501"
@@ -16,4 +18,26 @@ services:
     restart: unless-stopped
     stdin_open: true
     tty: true
+    depends_on:
+      - unstructured-api
+    networks:
+      - tgtransco-net
 
+  # Self-hosted Unstructured API — processes PDFs entirely locally.
+  # No data leaves the machine; SCARF_NO_ANALYTICS and DO_NOT_TRACK
+  # disable the only outbound analytics hooks in the image.
+  # Port 8000 is NOT exposed to the host — only reachable within this network.
+  unstructured-api:
+    image: downloads.unstructured.io/unstructured-io/unstructured-api:latest
+    container_name: tgtransco-unstructured-api
+    environment:
+      - SCARF_NO_ANALYTICS=true
+      - DO_NOT_TRACK=1
+      - UNSTRUCTURED_MEMORY_FREE_MINIMUM_MB=500
+    restart: unless-stopped
+    networks:
+      - tgtransco-net
+
+networks:
+  tgtransco-net:
+    driver: bridge

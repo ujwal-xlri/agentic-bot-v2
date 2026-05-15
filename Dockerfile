@@ -20,17 +20,6 @@ RUN apt-get update && apt-get install -y \
     zstd \
     git \
     supervisor \
-    # OCR engine + English language pack
-    tesseract-ocr \
-    tesseract-ocr-eng \
-    # OpenCV / rendering deps
-    libgl1 \
-    libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    # PDF rasterisation (required by Docling for OCR page rendering)
-    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -52,17 +41,17 @@ RUN curl -fsSL https://ollama.com/install.sh | sh
 WORKDIR /app
 COPY requirements.txt .
 
-# Batch 1 — PyTorch CPU (must be installed before anything that depends on it)
+# Batch 1 — PyTorch CPU (must install before sentence-transformers and langchain-huggingface
+# so pip selects the CPU wheel rather than the default CUDA wheel)
 RUN python3.11 -m pip install --no-cache-dir \
-    torch \
-    torchvision \
+    "torch==2.4.0+cpu" \
     --index-url https://download.pytorch.org/whl/cpu
 
-# Batch 2 — Transformers (pinned before sentence-transformers pulls a newer one)
+# Batch 2 — Transformers (pinned so sentence-transformers doesn't pull an incompatible version)
 RUN python3.11 -m pip install --no-cache-dir \
     transformers==4.44.2
 
-# Batch 3 — Sentence-transformers (embedding model used by HybridChunker)
+# Batch 3 — Sentence-transformers (embedding + reranker models)
 RUN python3.11 -m pip install --no-cache-dir \
     sentence-transformers==3.3.1
 
@@ -70,51 +59,21 @@ RUN python3.11 -m pip install --no-cache-dir \
 RUN python3.11 -m pip install --no-cache-dir \
     chromadb==0.5.23
 
-# Batch 5 — LangChain stack
+# Batch 5 — LangChain (only packages imported by the app)
 RUN python3.11 -m pip install --no-cache-dir \
     langchain-core==1.3.0 \
-    langchain-text-splitters==1.1.2 \
-    langchain==1.2.15 \
-    langchain-community==0.4.1 \
-    langchain-classic==1.0.4 \
     langchain-ollama==1.1.0 \
     langchain-chroma==1.1.0 \
     langchain-huggingface==1.2.2
 
-# Batch 6 — Docling (heavy; isolated so cache-busting it doesn't re-run LangChain)
+# Batch 6 — PDF tooling + UI
+# PDF parsing is handled by the unstructured-api sidecar — only requests needed here.
 RUN python3.11 -m pip install --no-cache-dir \
-    docling==2.15.0
-
-# Batch 7 — PDF tooling + UI
-RUN python3.11 -m pip install --no-cache-dir \
-    pdfplumber==0.11.4 \
+    requests \
     pymupdf \
+    openpyxl==3.1.5 \
     streamlit==1.40.2 \
     python-dotenv==1.0.1
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Pre-download Docling models at build time
-# Avoids runtime downloads and ensures OCR works without internet access.
-# Adds ~1-2 GB to the image but eliminates cold-start model fetching.
-# ─────────────────────────────────────────────────────────────────────────────
-RUN python3.11 -c "\
-import os; \
-os.environ['DOCLING_ARTIFACTS_PATH'] = '/app/.docling'; \
-from docling.document_converter import DocumentConverter, PdfFormatOption; \
-from docling.datamodel.pipeline_options import PdfPipelineOptions; \
-from docling.datamodel.base_models import InputFormat; \
-print('Downloading layout + table structure models...'); \
-PdfPipelineOptions(); \
-print('Downloading OCR models...'); \
-opts = PdfPipelineOptions(); \
-opts.do_ocr = True; \
-opts.do_table_structure = True; \
-DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)}); \
-print('All Docling models downloaded successfully.'); \
-"
-
-# Pin the model cache path so the runtime picks up what was baked in
-ENV DOCLING_ARTIFACTS_PATH=/app/.docling
 
 # ─────────────────────────────────────────────────────────────────────────────
 # App source
